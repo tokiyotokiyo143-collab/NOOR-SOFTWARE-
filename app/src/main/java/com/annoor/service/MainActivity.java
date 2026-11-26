@@ -35,8 +35,8 @@ import java.io.OutputStream;
 
 /** Hosts the AN-NOOR offline web app (assets/index.html) full screen. */
 public class MainActivity extends Activity {
-    private static final String HOST = "localhost";
-    private static final String START_URL = "http://" + HOST + "/assets/index.html";
+    private static final String HOST = "hale-thought-sk4jk.firebaseapp.com";
+    private static final String START_URL = "https://" + HOST + "/assets/index.html";
     private static final int REQ_FILE = 4711;
 
     private WebView web;
@@ -95,7 +95,6 @@ public class MainActivity extends Activity {
 
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
                 .setDomain(HOST)
-                .setHttpAllowed(true)
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
                 .build();
 
