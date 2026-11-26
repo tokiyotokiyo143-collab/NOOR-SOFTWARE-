@@ -1,0 +1,27 @@
+name: bootstrap2
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -e
+          git config user.name noor-bot
+          git config user.email noor-bot@users.noreply.github.com
+          Z=$(ls *noor-src.zip | head -1)
+          mkdir /tmp/x
+          unzip -q "$Z" -d /tmp/x
+          git rm -rq app gradle.properties settings.gradle.kts build.gradle.kts
+          rm -rf app
+          cp -r /tmp/x/. .
+          git rm -q --cached "$Z"
+          rm "$Z"
+          git checkout HEAD -- README.md
+          git rm -q --cached .github/workflows/boot2.yml 2>/dev/null || true
+          git add -A
+          git commit -m 'Merge sidebar and performance source update (gemini-3.5 model IDs kept)'
+          git push
