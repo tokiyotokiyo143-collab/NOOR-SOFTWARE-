@@ -35,8 +35,8 @@ import java.io.OutputStream;
 
 /** Hosts the AN-NOOR offline web app (assets/index.html) full screen. */
 public class MainActivity extends Activity {
-    private static final String HOST = "appassets.androidplatform.net";
-    private static final String START_URL = "https://" + HOST + "/assets/index.html";
+    private static final String HOST = "localhost";
+    private static final String START_URL = "http://" + HOST + "/assets/index.html";
     private static final int REQ_FILE = 4711;
 
     private WebView web;
@@ -84,9 +84,18 @@ public class MainActivity extends Activity {
         s.setSupportZoom(false);
         s.setBuiltInZoomControls(false);
         s.setTextZoom(100);
+        s.setSupportMultipleWindows(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
+        // Google refuses sign-in from a plain WebView; present a normal mobile Chrome user agent.
+        String ua = s.getUserAgentString().replace("; wv", "").replace("Version/4.0 ", "");
+        s.setUserAgentString(ua);
+        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        cm.setAcceptThirdPartyCookies(web, true);
 
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
                 .setDomain(HOST)
+                .setHttpAllowed(true)
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
                 .build();
 
@@ -118,6 +127,35 @@ public class MainActivity extends Activity {
         });
 
         web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture,
+                                          android.os.Message resultMsg) {
+                final WebView pop = new WebView(MainActivity.this);
+                WebSettings ps = pop.getSettings();
+                ps.setJavaScriptEnabled(true);
+                ps.setDomStorageEnabled(true);
+                ps.setSupportMultipleWindows(true);
+                ps.setJavaScriptCanOpenWindowsAutomatically(true);
+                ps.setUserAgentString(web.getSettings().getUserAgentString());
+                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(pop, true);
+                final android.app.Dialog d = new android.app.Dialog(MainActivity.this,
+                        android.R.style.Theme_DeviceDefault_NoActionBar);
+                d.setContentView(pop);
+                pop.setWebViewClient(new WebViewClient());
+                pop.setWebChromeClient(new WebChromeClient() {
+                    @Override
+                    public void onCloseWindow(WebView w) {
+                        d.dismiss();
+                        w.destroy();
+                    }
+                });
+                d.show();
+                WebView.WebViewTransport t = (WebView.WebViewTransport) resultMsg.obj;
+                t.setWebView(pop);
+                resultMsg.sendToTarget();
+                return true;
+            }
+
             @Override
             public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb,
                                              FileChooserParams params) {
