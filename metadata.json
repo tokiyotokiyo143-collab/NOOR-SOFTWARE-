@@ -1,0 +1,6 @@
+{
+  "name": "Noor Software",
+  "description": "Billing, stock, repair/service, purchase, and accounts app for AN-NOOR Mobile Service Point with offline-first Room + Firebase Firestore sync and floating Tamil/English Gemini AI assistant.",
+  "requestFramePermissions": ["CAMERA", "RECORD_AUDIO"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
