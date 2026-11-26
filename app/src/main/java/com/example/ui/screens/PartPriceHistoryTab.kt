@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -127,10 +129,10 @@ fun PartPriceHistoryTab(
     var selectedPartKey by remember(trackedParts) { mutableStateOf(trackedParts.firstOrNull()?.key) }
     var showAllTimeHistory by remember { mutableStateOf(false) }
 
-    val increasingCount = trackedParts.count { it.costDelta > 0.01 }
-    val dropCount = trackedParts.count { it.costDelta < -0.01 }
-    val twoPlusCount = trackedParts.count { it.points.size >= 2 }
-    val highestHike = trackedParts.filter { it.costDelta > 0.01 }.maxByOrNull { it.costDelta }
+    val increasingCount = remember(trackedParts) { trackedParts.count { it.costDelta > 0.01 } }
+    val dropCount = remember(trackedParts) { trackedParts.count { it.costDelta < -0.01 } }
+    val twoPlusCount = remember(trackedParts) { trackedParts.count { it.points.size >= 2 } }
+    val highestHike = remember(trackedParts) { trackedParts.filter { it.costDelta > 0.01 }.maxByOrNull { it.costDelta } }
 
     val filteredList = remember(trackedParts, searchQuery, sortMode, filterChip) {
         val q = searchQuery.trim().lowercase()
@@ -234,8 +236,8 @@ fun PartPriceHistoryTab(
         } else {
             // Part selector list
             Text("Select Part Model", color = palette.textMuted, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                filteredList.forEach { part ->
+            LazyRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(filteredList, key = { it.key }) { part ->
                     val sel = selectedPartKey == part.key
                     Box(
                         modifier = Modifier
@@ -314,13 +316,15 @@ fun PartPriceHistoryTab(
 
                 // Supplier Comparison Table
                 Text("Supplier Comparison · Sorted lowest latest rate first", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                val supplierRows = selected.points.groupBy { it.supplier }.map { (sup, list) ->
-                    val latest = list.last().buyCost
-                    val avg = list.sumOf { it.buyCost * it.qty } / list.sumOf { it.qty }.coerceAtLeast(1)
-                    val qty = list.sumOf { it.qty }
-                    val lastDate = list.last().date
-                    Triple(sup, latest, Triple(avg, "${list.size} · $qty", lastDate))
-                }.sortedBy { it.second }
+                val supplierRows = remember(selected) {
+                    selected.points.groupBy { it.supplier }.map { (sup, list) ->
+                        val latest = list.last().buyCost
+                        val avg = list.sumOf { it.buyCost * it.qty } / list.sumOf { it.qty }.coerceAtLeast(1)
+                        val qty = list.sumOf { it.qty }
+                        val lastDate = list.last().date
+                        Triple(sup, latest, Triple(avg, "${list.size} · $qty", lastDate))
+                    }.sortedBy { it.second }
+                }
 
                 supplierRows.forEachIndexed { idx, (sup, latest, extra) ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -339,7 +343,9 @@ fun PartPriceHistoryTab(
 
                 HorizontalDivider(color = palette.border)
                 Text("Date · Bill # | Buy Cost | Change", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                val shownPts = if (showAllTimeHistory) selected.points.reversed() else selected.points.reversed().take(6)
+                val shownPts = remember(selected, showAllTimeHistory) {
+                    if (showAllTimeHistory) selected.points.reversed() else selected.points.reversed().take(6)
+                }
                 shownPts.forEachIndexed { i, pt ->
                     val prev = shownPts.getOrNull(i + 1)
                     val diff = if (prev != null) pt.buyCost - prev.buyCost else 0.0

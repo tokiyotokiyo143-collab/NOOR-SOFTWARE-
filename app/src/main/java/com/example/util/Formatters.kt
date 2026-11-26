@@ -12,6 +12,10 @@ import kotlin.math.roundToLong
 
 object Formatters {
     private val enInLocale = Locale("en", "IN")
+    private val isoSdf = ThreadLocal.withInitial { SimpleDateFormat("yyyy-MM-dd", Locale.US) }
+    private val displaySdf = ThreadLocal.withInitial { SimpleDateFormat("dd MMM yyyy", Locale.US) }
+    private val shortWeekdaySdf = ThreadLocal.withInitial { SimpleDateFormat("EEE, dd MMM", Locale.US) }
+    private val timeSdf = ThreadLocal.withInitial { SimpleDateFormat("h:mm a", Locale.US) }
 
     fun formatInr(amount: Double, showDecimals: Boolean = false): String {
         val safe = if (amount.isNaN() || amount.isInfinite()) 0.0 else amount
@@ -41,17 +45,15 @@ object Formatters {
         return chunks.joinToString(",") + "," + last3
     }
 
-    fun todayIso(): String {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        return sdf.format(Date())
-    }
+    fun todayIso(): String = isoSdf.get()!!.format(Date())
+
+    fun formatIsoDate(date: Date): String = isoSdf.get()!!.format(date)
 
     fun formatDisplayDate(isoDate: String): String {
         if (isoDate.isBlank()) return ""
         return try {
-            val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            val d = parser.parse(isoDate.take(10)) ?: return isoDate
-            SimpleDateFormat("dd MMM yyyy", Locale.US).format(d)
+            val d = isoSdf.get()!!.parse(isoDate.take(10)) ?: return isoDate
+            displaySdf.get()!!.format(d)
         } catch (_: Exception) {
             isoDate
         }
@@ -60,16 +62,15 @@ object Formatters {
     fun formatShortWeekday(isoDate: String): String {
         if (isoDate.isBlank()) return ""
         return try {
-            val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            val d = parser.parse(isoDate.take(10)) ?: return isoDate
-            SimpleDateFormat("EEE, dd MMM", Locale.US).format(d)
+            val d = isoSdf.get()!!.parse(isoDate.take(10)) ?: return isoDate
+            shortWeekdaySdf.get()!!.format(d)
         } catch (_: Exception) {
             isoDate
         }
     }
 
     fun formatTime(millis: Long): String {
-        return SimpleDateFormat("h:mm a", Locale.US).format(Date(millis))
+        return timeSdf.get()!!.format(Date(millis))
     }
 
     fun formatDurationHoursMins(startMs: Long, endMs: Long): String {
@@ -81,7 +82,7 @@ object Formatters {
 
     fun daysBetweenIso(fromIso: String, toIso: String = todayIso()): Int {
         return try {
-            val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val parser = isoSdf.get()!!
             val d1 = parser.parse(fromIso.take(10)) ?: return 0
             val d2 = parser.parse(toIso.take(10)) ?: return 0
             ((d2.time - d1.time) / 86_400_000L).toInt()
@@ -99,7 +100,7 @@ object Formatters {
             "This Week" -> {
                 val cal = Calendar.getInstance()
                 cal.set(Calendar.DAY_OF_WEEK, cal.firstDayOfWeek)
-                val weekStart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+                val weekStart = isoSdf.get()!!.format(cal.time)
                 d >= weekStart && d <= today
             }
             "This Month" -> d.take(7) == today.take(7)
@@ -137,23 +138,51 @@ object Formatters {
         return afterSlash.removePrefix("@")
     }
 
+    fun tokenizeQuery(query: String): List<String> {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val tokens = ArrayList<String>(4)
+        var start = -1
+        for (i in trimmed.indices) {
+            if (trimmed[i].isWhitespace()) {
+                if (start >= 0) {
+                    tokens.add(trimmed.substring(start, i))
+                    start = -1
+                }
+            } else if (start < 0) {
+                start = i
+            }
+        }
+        if (start >= 0) {
+            tokens.add(trimmed.substring(start))
+        }
+        return tokens
+    }
+
     /**
      * Multi-word search: every whitespace-separated token must match across
      * brand, model, color, category, alsoFits, barcode, or imei.
      */
     fun matchesStockQuery(item: StockItem, query: String): Boolean {
-        val tokens = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val tokens = tokenizeQuery(query)
         if (tokens.isEmpty()) return true
-        val haystack = listOf(
-            item.brand,
-            item.model,
-            item.color,
-            item.category,
-            item.alsoFits,
-            item.barcode,
-            item.imei
-        ).joinToString(" ").lowercase()
-        return tokens.all { token -> haystack.contains(token) }
+        return matchesStockQueryTokens(item, tokens)
+    }
+
+    fun matchesStockQueryTokens(item: StockItem, tokens: List<String>): Boolean {
+        if (tokens.isEmpty()) return true
+        for (i in tokens.indices) {
+            val token = tokens[i]
+            val found = item.brand.contains(token, ignoreCase = true) ||
+                item.model.contains(token, ignoreCase = true) ||
+                item.color.contains(token, ignoreCase = true) ||
+                item.category.contains(token, ignoreCase = true) ||
+                item.alsoFits.contains(token, ignoreCase = true) ||
+                item.barcode.contains(token, ignoreCase = true) ||
+                item.imei.contains(token, ignoreCase = true)
+            if (!found) return false
+        }
+        return true
     }
 
     fun formatSeqNumber(prefix: String, seq: Int): String {

@@ -5,9 +5,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -47,18 +48,33 @@ fun ServiceStatusScreen(
     var selectedFilter by remember { mutableStateOf("In Shop (With Me)") }
     var query by remember { mutableStateOf("") }
 
-    val filters = listOf(
-        "In Shop (With Me)",
-        "Service in Progress",
-        "Ready for Delivery",
-        "Payment Pending",
-        "Waiting for Part"
-    )
+    val filters = remember {
+        listOf(
+            "In Shop (With Me)",
+            "Service in Progress",
+            "Ready for Delivery",
+            "Payment Pending",
+            "Waiting for Part"
+        )
+    }
 
-    val phonesInShop = repairs.count { it.status != "Delivered" }
-    val waitingPickup = repairs.count { it.status == "Ready for Pickup" }
-    val pendingCollect = repairs.filter { it.balanceDue > 0.0 }.sumOf { it.balanceDue }
-    val todaysDeliveries = repairs.count { it.status == "Delivered" && (it.deliveredDate == today || it.deliveryDate == today) }
+    val counters = remember(repairs, today) {
+        var inShop = 0
+        var waiting = 0
+        var pendingAmt = 0.0
+        var todayDeliv = 0
+        for (r in repairs) {
+            if (r.status != "Delivered") inShop++
+            if (r.status == "Ready for Pickup") waiting++
+            if (r.balanceDue > 0.0) pendingAmt += r.balanceDue
+            if (r.status == "Delivered" && (r.deliveredDate == today || r.deliveryDate == today)) todayDeliv++
+        }
+        listOf(inShop, waiting, pendingAmt, todayDeliv)
+    }
+    val phonesInShop = counters[0] as Int
+    val waitingPickup = counters[1] as Int
+    val pendingCollect = counters[2] as Double
+    val todaysDeliveries = counters[3] as Int
 
     val filtered = remember(repairs, selectedFilter, query) {
         val q = query.trim().lowercase()
@@ -82,72 +98,82 @@ fun ServiceStatusScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        NoorSectionTitle(
-            title = "Service Status",
-            subtitle = "Live phone tracking · Ready WhatsApp alerts, part source, payment collection & 3-day overdue highlights.",
-            trailing = {
-                TextButton(onClick = { vm.navigateTo(NavSection.REPAIRS) }) {
-                    Text("+ Service", color = palette.accent, fontWeight = FontWeight.Bold)
+        item(key = "header") {
+            NoorSectionTitle(
+                title = "Service Status",
+                subtitle = "Live phone tracking · Ready WhatsApp alerts, part source, payment collection & 3-day overdue highlights.",
+                trailing = {
+                    TextButton(onClick = { vm.navigateTo(NavSection.REPAIRS) }) {
+                        Text("+ Service", color = palette.accent, fontWeight = FontWeight.Bold)
+                    }
                 }
-            }
-        )
+            )
+        }
 
         // 4 Counters
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ServiceCounterTile("Phones in Shop", phonesInShop.toString(), palette.accent, Modifier.weight(1f))
-            ServiceCounterTile("Waiting for pickup", waitingPickup.toString(), palette.statusGreen, Modifier.weight(1f))
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ServiceCounterTile("Pending to Collect", Formatters.formatInr(pendingCollect), palette.statusAmber, Modifier.weight(1f))
-            ServiceCounterTile("Today's Deliveries", todaysDeliveries.toString(), palette.textPrimary, Modifier.weight(1f))
+        item(key = "counters") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ServiceCounterTile("Phones in Shop", phonesInShop.toString(), palette.accent, Modifier.weight(1f))
+                    ServiceCounterTile("Waiting for pickup", waitingPickup.toString(), palette.statusGreen, Modifier.weight(1f))
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ServiceCounterTile("Pending to Collect", Formatters.formatInr(pendingCollect), palette.statusAmber, Modifier.weight(1f))
+                    ServiceCounterTile("Today's Deliveries", todaysDeliveries.toString(), palette.textPrimary, Modifier.weight(1f))
+                }
+            }
         }
 
         // Filter Chips
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            filters.forEach { f ->
-                val sel = selectedFilter == f
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (sel) palette.accent else palette.inputBg)
-                        .border(1.dp, if (sel) palette.accent else palette.border, RoundedCornerShape(12.dp))
-                        .clickable { selectedFilter = f }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+        item(key = "filters") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(f, color = if (sel) androidx.compose.ui.graphics.Color.White else palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    filters.forEach { f ->
+                        val sel = selectedFilter == f
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (sel) palette.accent else palette.inputBg)
+                                .border(1.dp, if (sel) palette.accent else palette.border, RoundedCornerShape(12.dp))
+                                .clickable { selectedFilter = f }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(f, color = if (sel) androidx.compose.ui.graphics.Color.White else palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
+
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search by customer name, phone number, phone model, ref # or problem...") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp)
+                )
             }
         }
 
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search by customer name, phone number, phone model, ref # or problem...") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp)
-        )
-
         if (filtered.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxWidth().noorCard(palette).padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No phones in this category.", color = palette.textSecondary, fontSize = 13.5.sp)
+            item(key = "empty") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().noorCard(palette).padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No phones in this category.", color = palette.textSecondary, fontSize = 13.5.sp)
+                }
             }
         } else {
-            filtered.forEach { r ->
+            items(filtered, key = { it.id }) { r ->
                 val ageDays = Formatters.daysBetweenIso(r.date, today)
                 val isOverdue = r.status != "Delivered" && ageDays >= 3
                 Column(
@@ -230,7 +256,6 @@ fun ServiceStatusScreen(
                 }
             }
         }
-        Spacer(Modifier.height(96.dp))
     }
 }
 

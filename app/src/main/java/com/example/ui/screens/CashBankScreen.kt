@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.*
 import com.example.ui.MainViewModel
 import com.example.ui.components.NoorPrimaryButton
@@ -48,167 +51,178 @@ fun CashBankScreen(
     val palette = LocalNoorColors.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val analytics by vm.repo.analytics.collectAsStateWithLifecycle()
 
-    val cashInHand = remember(settings, invoices, purchases, payments, expenses, repairs, cashBankTxns) {
-        vm.repo.computeCashInHand()
-    }
-    val bankBalance = remember(bankAccounts, invoices, purchases, payments, expenses, cashBankTxns) {
-        vm.repo.computeBankBalance()
-    }
-    val totalReceivables = remember(parties, invoices, purchases, payments, repairs) {
-        parties.sumOf { vm.repo.computePartySummary(it).receivableBalance }
+    val cashInHand = analytics.cashInHand
+    val bankBalance = analytics.bankBalance
+    val totalReceivables = remember(analytics.partySummaries) {
+        analytics.partySummaries.sumOf { it.receivableBalance }
     }
     val cheques = remember(cashBankTxns) { cashBankTxns.filter { it.type == "cheque" } }
-    val pendingChequesSum = cheques.filter { it.chequeStatus == "Pending" }.sumOf { it.amount }
+    val pendingChequesSum = remember(cheques) {
+        cheques.filter { it.chequeStatus == "Pending" }.sumOf { it.amount }
+    }
 
     var showAddBank by remember { mutableStateOf(false) }
     var showAddEntry by remember { mutableStateOf(false) }
     var showChequesModal by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        NoorSectionTitle(
-            title = "Cash & Bank Accounts",
-            subtitle = "Live Cash in Hand, UPI/Bank balances, cash transfers & cheques"
-        )
-
-        // Live Balance Cards
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(modifier = Modifier.weight(1f).noorCard(palette, radius = 16.dp).padding(12.dp)) {
-                Text("Cash in Hand", color = palette.textSecondary, fontSize = 12.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(Formatters.formatInr(cashInHand), color = palette.statusGreen, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                Text("Opening: ${Formatters.formatInr(settings.openingCashBalance)}", color = palette.textMuted, fontSize = 11.sp)
-            }
-            Column(modifier = Modifier.weight(1f).noorCard(palette, radius = 16.dp).padding(12.dp)) {
-                Text("Bank Balance", color = palette.textSecondary, fontSize = 12.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(Formatters.formatInr(bankBalance), color = palette.accent, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                Text("Includes UPI, Card & Bank transfers plus cleared cheques.", color = palette.textMuted, fontSize = 10.5.sp, lineHeight = 13.sp)
-            }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .noorCard(palette, radius = 16.dp)
-                    .clickable { vm.setShowPendingDuesSheet(true) }
-                    .padding(12.dp)
-            ) {
-                Text("Receivables", color = palette.textSecondary, fontSize = 12.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(Formatters.formatInr(totalReceivables), color = palette.statusAmber, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                Text("Customer dues & credit balances receivable.", color = palette.textMuted, fontSize = 10.5.sp)
-                Spacer(Modifier.height(4.dp))
-                Text("View Dues →", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .noorCard(palette, radius = 16.dp)
-                    .clickable { showChequesModal = true }
-                    .padding(12.dp)
-            ) {
-                Text("Cheques (${cheques.size})", color = palette.textSecondary, fontSize = 12.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(Formatters.formatInr(pendingChequesSum), color = palette.textPrimary, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                Text("Pending clearance", color = palette.textMuted, fontSize = 10.5.sp)
-                Spacer(Modifier.height(4.dp))
-                Text("Manage Cheques →", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            }
-        }
-
-        // Action Buttons
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { showAddBank = true }, modifier = Modifier.weight(1f)) {
-                Text("Add Bank Account", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-            }
-            NoorPrimaryButton(
-                text = "Record Cash / Bank Entry",
-                onClick = { showAddEntry = true },
-                modifier = Modifier.weight(1.25f)
+        item(key = "header") {
+            NoorSectionTitle(
+                title = "Cash & Bank Accounts",
+                subtitle = "Live Cash in Hand, UPI/Bank balances, cash transfers & cheques"
             )
         }
 
-        // Connected Bank Accounts
-        Column(
-            modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 16.dp).padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text("Connected Bank Accounts", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            if (bankAccounts.isEmpty()) {
-                Text("No bank accounts added yet.", color = palette.textSecondary, fontSize = 12.5.sp)
-            } else {
-                bankAccounts.forEach { acc ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "${acc.name}${if (acc.last4.isNotBlank()) " ·••${acc.last4}" else ""}",
-                                color = palette.textPrimary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.5.sp
-                            )
-                            if (acc.upiHandle.isNotBlank()) {
-                                Text("UPI: ${acc.upiHandle}", color = palette.textMuted, fontSize = 11.5.sp)
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(Formatters.formatInr(acc.openingBalance), color = palette.accent, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { scope.launch { vm.repo.deleteBankAccount(acc.id) } }) {
-                                Icon(Icons.Outlined.Delete, contentDescription = "Delete Bank", tint = palette.statusRed, modifier = Modifier.size(18.dp))
-                            }
-                        }
+        // Live Balance Cards
+        item(key = "balances") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(modifier = Modifier.weight(1f).noorCard(palette, radius = 16.dp).padding(12.dp)) {
+                        Text("Cash in Hand", color = palette.textSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(Formatters.formatInr(cashInHand), color = palette.statusGreen, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        Text("Opening: ${Formatters.formatInr(settings.openingCashBalance)}", color = palette.textMuted, fontSize = 11.sp)
                     }
-                    HorizontalDivider(color = palette.border.copy(alpha = 0.4f))
+                    Column(modifier = Modifier.weight(1f).noorCard(palette, radius = 16.dp).padding(12.dp)) {
+                        Text("Bank Balance", color = palette.textSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(Formatters.formatInr(bankBalance), color = palette.accent, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        Text("Includes UPI, Card & Bank transfers plus cleared cheques.", color = palette.textMuted, fontSize = 10.5.sp, lineHeight = 13.sp)
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .noorCard(palette, radius = 16.dp)
+                            .clickable { vm.setShowPendingDuesSheet(true) }
+                            .padding(12.dp)
+                    ) {
+                        Text("Receivables", color = palette.textSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(Formatters.formatInr(totalReceivables), color = palette.statusAmber, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                        Text("Customer dues & credit balances receivable.", color = palette.textMuted, fontSize = 10.5.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text("View Dues →", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .noorCard(palette, radius = 16.dp)
+                            .clickable { showChequesModal = true }
+                            .padding(12.dp)
+                    ) {
+                        Text("Cheques (${cheques.size})", color = palette.textSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(Formatters.formatInr(pendingChequesSum), color = palette.textPrimary, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                        Text("Pending clearance", color = palette.textMuted, fontSize = 10.5.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text("Manage Cheques →", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+
+                // Action Buttons
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { showAddBank = true }, modifier = Modifier.weight(1f)) {
+                        Text("Add Bank Account", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                    }
+                    NoorPrimaryButton(
+                        text = "Record Cash / Bank Entry",
+                        onClick = { showAddEntry = true },
+                        modifier = Modifier.weight(1.25f)
+                    )
                 }
             }
         }
 
-        // Cash & Bank Entries
-        Column(
-            modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 16.dp).padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text("Cash & Bank Transfers", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            if (cashBankTxns.isEmpty()) {
-                Text(
-                    "No cash or bank transactions yet. Sales, purchases, expenses & transfers appear here automatically.",
-                    color = palette.textSecondary,
-                    fontSize = 12.5.sp
-                )
-            } else {
-                cashBankTxns.forEach { txn ->
-                    val label = when (txn.type) {
-                        "bank_deposit" -> "Cash Deposited into Bank"
-                        "bank_withdraw" -> "Cash Withdrawn from Bank"
-                        "cash_in" -> "Manual Cash In (Drawer Top-up)"
-                        "cash_out" -> "Manual Cash Out (Owner Drawing)"
-                        "cheque" -> "Cheque Received #${txn.chequeNumber} (${txn.chequeStatus})"
-                        else -> txn.type
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(label, color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("${Formatters.formatDisplayDate(txn.date)}${if (txn.notes.isNotBlank()) " · ${txn.notes}" else ""}", color = palette.textSecondary, fontSize = 11.5.sp)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(Formatters.formatInr(txn.amount), color = palette.accent, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { scope.launch { vm.repo.deleteCashBankTxn(txn.id) } }) {
-                                Icon(Icons.Outlined.Delete, contentDescription = "Delete Entry", tint = palette.statusRed, modifier = Modifier.size(18.dp))
+        // Connected Bank Accounts
+        item(key = "banks_card") {
+            Column(
+                modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 16.dp).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Connected Bank Accounts", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                if (bankAccounts.isEmpty()) {
+                    Text("No bank accounts added yet.", color = palette.textSecondary, fontSize = 12.5.sp)
+                } else {
+                    bankAccounts.forEach { acc ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${acc.name}${if (acc.last4.isNotBlank()) " ·••${acc.last4}" else ""}",
+                                    color = palette.textPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.5.sp
+                                )
+                                if (acc.upiHandle.isNotBlank()) {
+                                    Text("UPI: ${acc.upiHandle}", color = palette.textMuted, fontSize = 11.5.sp)
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(Formatters.formatInr(acc.openingBalance), color = palette.accent, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { scope.launch { vm.repo.deleteBankAccount(acc.id) } }) {
+                                    Icon(Icons.Outlined.Delete, contentDescription = "Delete Bank", tint = palette.statusRed, modifier = Modifier.size(18.dp))
+                                }
                             }
                         }
+                        HorizontalDivider(color = palette.border.copy(alpha = 0.4f))
                     }
-                    HorizontalDivider(color = palette.border.copy(alpha = 0.4f))
                 }
             }
         }
-        Spacer(Modifier.height(96.dp))
+
+        // Cash & Bank Entries Header
+        item(key = "txns_header") {
+            Column(
+                modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 16.dp).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Cash & Bank Transfers", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                if (cashBankTxns.isEmpty()) {
+                    Text(
+                        "No cash or bank transactions yet. Sales, purchases, expenses & transfers appear here automatically.",
+                        color = palette.textSecondary,
+                        fontSize = 12.5.sp
+                    )
+                }
+            }
+        }
+
+        if (cashBankTxns.isNotEmpty()) {
+            items(cashBankTxns, key = { it.id }) { txn ->
+                val label = when (txn.type) {
+                    "bank_deposit" -> "Cash Deposited into Bank"
+                    "bank_withdraw" -> "Cash Withdrawn from Bank"
+                    "cash_in" -> "Manual Cash In (Drawer Top-up)"
+                    "cash_out" -> "Manual Cash Out (Owner Drawing)"
+                    "cheque" -> "Cheque Received #${txn.chequeNumber} (${txn.chequeStatus})"
+                    else -> txn.type
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 12.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(label, color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("${Formatters.formatDisplayDate(txn.date)}${if (txn.notes.isNotBlank()) " · ${txn.notes}" else ""}", color = palette.textSecondary, fontSize = 11.5.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(Formatters.formatInr(txn.amount), color = palette.accent, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = { scope.launch { vm.repo.deleteCashBankTxn(txn.id) } }) {
+                            Icon(Icons.Outlined.Delete, contentDescription = "Delete Entry", tint = palette.statusRed, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (showAddBank) {
@@ -355,11 +369,14 @@ fun CashBankScreen(
             containerColor = palette.card,
             title = { Text("Manage Cheques", color = palette.textPrimary, fontWeight = FontWeight.Bold) },
             text = {
-                Column(modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (cheques.isEmpty()) {
-                        Text("No cheques recorded yet.", color = palette.textSecondary)
-                    } else {
-                        cheques.forEach { ch ->
+                if (cheques.isEmpty()) {
+                    Text("No cheques recorded yet.", color = palette.textSecondary)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(cheques, key = { it.id }) { ch ->
                             Column(
                                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(palette.inputBg).padding(10.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)

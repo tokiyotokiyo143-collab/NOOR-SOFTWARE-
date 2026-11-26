@@ -5,10 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -53,7 +54,7 @@ fun ExpensesScreen(
     var period by remember { mutableStateOf("This Month") }
     var deleteTarget by remember { mutableStateOf<ExpenseRecord?>(null) }
 
-    val quickCats = listOf("Expense", "Rent", "Electricity", "Tea", "Repairs", "Supplies", "Other")
+    val quickCats = remember { listOf("Expense", "Rent", "Electricity", "Tea", "Repairs", "Supplies", "Other") }
     val payModes = remember(bankAccounts) {
         listOf("Cash", "UPI", "Card", "Bank Transfer") + bankAccounts.map { it.name }
     }
@@ -61,190 +62,200 @@ fun ExpensesScreen(
     val periodExpenses = remember(expenses, period) {
         expenses.filter { Formatters.isDateInPeriod(it.date, period) }
     }
-    val totalPeriod = periodExpenses.sumOf { it.amount }
+    val totalPeriod = remember(periodExpenses) { periodExpenses.sumOf { it.amount } }
     val byCat = remember(periodExpenses) {
         periodExpenses.groupBy { it.category.ifBlank { "Expense" } }
             .mapValues { (_, list) -> list.sumOf { it.amount } }
             .entries.sortedByDescending { it.value }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        NoorSectionTitle(
-            title = "Daily & Overhead Expenses",
-            subtitle = "Track shop rent, electricity, tea, courier & daily cash drawer expenses."
-        )
-
-        // Form Card
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .noorCard(palette, radius = 16.dp, highlighted = editingId != null)
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(if (editingId != null) "Edit Expense" else "Record Expense", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                if (editingId != null) {
-                    TextButton(onClick = {
-                        editingId = null; category = "Expense"; reason = ""; amountText = ""; notes = ""
-                    }) { Text("Cancel Edit", color = palette.accent, fontSize = 12.sp) }
-                }
-            }
-
-            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                quickCats.forEach { c ->
-                    FilterChip(selected = category == c, onClick = { category = c }, label = { Text(c, fontSize = 11.5.sp) })
-                }
-            }
-
-            OutlinedTextField(
-                value = category,
-                onValueChange = { category = it },
-                label = { Text("Category") },
-                placeholder = { Text("Rent, Electricity, Repairs, Supplies...") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            )
-            OutlinedTextField(
-                value = reason,
-                onValueChange = { reason = it },
-                label = { Text("Reason / Description *") },
-                placeholder = { Text("e.g. Monthly shop rent, EB bill, Soldering wire") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("expense_reason"),
-                shape = RoundedCornerShape(12.dp)
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = amountText,
-                    onValueChange = { amountText = it },
-                    label = { Text("Amount (₹) *") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.weight(1f).testTag("expense_amount"),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                OutlinedTextField(
-                    value = date,
-                    onValueChange = { date = it },
-                    label = { Text("Date") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
-                )
-            }
-
-            Text("Paid From", color = palette.textMuted, fontSize = 11.5.sp)
-            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                payModes.forEach { pm ->
-                    FilterChip(selected = paidFrom == pm, onClick = { paidFrom = pm }, label = { Text(pm, fontSize = 11.5.sp) })
-                }
-            }
-
-            OutlinedTextField(
-                value = notes,
-                onValueChange = { notes = it },
-                label = { Text("Notes") },
-                placeholder = { Text("Optional note...") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            NoorPrimaryButton(
-                text = if (editingId != null) "Update Expense" else "Save Expense",
-                icon = Icons.Outlined.CurrencyRupee,
-                testTag = "expense_save_button",
-                onClick = {
-                    val amt = amountText.toDoubleOrNull() ?: 0.0
-                    if (reason.isBlank() || amt <= 0.0) {
-                        Toast.makeText(context, "Enter reason and valid amount.", Toast.LENGTH_SHORT).show()
-                        return@NoorPrimaryButton
-                    }
-                    scope.launch {
-                        val existing = editingId?.let { id -> expenses.find { it.id == id } }
-                        vm.repo.saveExpense(
-                            (existing ?: ExpenseRecord()).copy(
-                                category = category.ifBlank { "Expense" },
-                                reason = reason,
-                                amount = amt,
-                                date = date.ifBlank { Formatters.todayIso() },
-                                paymentMode = paidFrom,
-                                notes = notes
-                            )
-                        )
-                        editingId = null; reason = ""; amountText = ""; notes = ""
-                        Toast.makeText(context, "Expense saved", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
+        item(key = "header") {
+            NoorSectionTitle(
+                title = "Daily & Overhead Expenses",
+                subtitle = "Track shop rent, electricity, tea, courier & daily cash drawer expenses."
             )
         }
 
+        // Form Card
+        item(key = "form") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .noorCard(palette, radius = 16.dp, highlighted = editingId != null)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (editingId != null) "Edit Expense" else "Record Expense", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    if (editingId != null) {
+                        TextButton(onClick = {
+                            editingId = null; category = "Expense"; reason = ""; amountText = ""; notes = ""
+                        }) { Text("Cancel Edit", color = palette.accent, fontSize = 12.sp) }
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    quickCats.forEach { c ->
+                        FilterChip(selected = category == c, onClick = { category = c }, label = { Text(c, fontSize = 11.5.sp) })
+                    }
+                }
+
+                OutlinedTextField(
+                    value = category,
+                    onValueChange = { category = it },
+                    label = { Text("Category") },
+                    placeholder = { Text("Rent, Electricity, Repairs, Supplies...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Reason / Description *") },
+                    placeholder = { Text("e.g. Monthly shop rent, EB bill, Soldering wire") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("expense_reason"),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { amountText = it },
+                        label = { Text("Amount (₹) *") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f).testTag("expense_amount"),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    OutlinedTextField(
+                        value = date,
+                        onValueChange = { date = it },
+                        label = { Text("Date") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+
+                Text("Paid From", color = palette.textMuted, fontSize = 11.5.sp)
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    payModes.forEach { pm ->
+                        FilterChip(selected = paidFrom == pm, onClick = { paidFrom = pm }, label = { Text(pm, fontSize = 11.5.sp) })
+                    }
+                }
+
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Notes") },
+                    placeholder = { Text("Optional note...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                NoorPrimaryButton(
+                    text = if (editingId != null) "Update Expense" else "Save Expense",
+                    icon = Icons.Outlined.CurrencyRupee,
+                    testTag = "expense_save_button",
+                    onClick = {
+                        val amt = amountText.toDoubleOrNull() ?: 0.0
+                        if (reason.isBlank() || amt <= 0.0) {
+                            Toast.makeText(context, "Enter reason and valid amount.", Toast.LENGTH_SHORT).show()
+                            return@NoorPrimaryButton
+                        }
+                        scope.launch {
+                            val existing = editingId?.let { id -> expenses.find { it.id == id } }
+                            vm.repo.saveExpense(
+                                (existing ?: ExpenseRecord()).copy(
+                                    category = category.ifBlank { "Expense" },
+                                    reason = reason,
+                                    amount = amt,
+                                    date = date.ifBlank { Formatters.todayIso() },
+                                    paymentMode = paidFrom,
+                                    notes = notes
+                                )
+                            )
+                            editingId = null; reason = ""; amountText = ""; notes = ""
+                            Toast.makeText(context, "Expense saved", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
         // Period Filter
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Today", "This Week", "This Month", "This Year", "All").forEach { p ->
-                FilterChip(selected = period == p, onClick = { period = p }, label = { Text(p, fontSize = 11.5.sp) })
+        item(key = "period") {
+            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Today", "This Week", "This Month", "This Year", "All").forEach { p ->
+                    FilterChip(selected = period == p, onClick = { period = p }, label = { Text(p, fontSize = 11.5.sp) })
+                }
             }
         }
 
         // Spending by Category Card
-        Column(
-            modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 16.dp).padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Spending by Category", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Text(Formatters.formatInr(totalPeriod), color = palette.accent, fontWeight = FontWeight.Black, fontSize = 15.sp)
-            }
-            if (byCat.isEmpty()) {
-                Text("No expenses recorded in this period.", color = palette.textSecondary, fontSize = 13.sp)
-            } else {
-                byCat.forEach { (cat, sum) ->
-                    val pct = if (totalPeriod > 0) (sum / totalPeriod * 100.0) else 0.0
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(cat, color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp)
-                            Text("Spent: ${Formatters.formatInr(sum)} · Share: ${pct.toInt()}%", color = palette.textSecondary, fontSize = 12.sp)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(palette.inputBg)
-                        ) {
+        item(key = "by_cat") {
+            Column(
+                modifier = Modifier.fillMaxWidth().noorCard(palette, radius = 16.dp).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Spending by Category", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(Formatters.formatInr(totalPeriod), color = palette.accent, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                }
+                if (byCat.isEmpty()) {
+                    Text("No expenses recorded in this period.", color = palette.textSecondary, fontSize = 13.sp)
+                } else {
+                    byCat.forEach { (cat, sum) ->
+                        val pct = if (totalPeriod > 0) (sum / totalPeriod * 100.0) else 0.0
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(cat, color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp)
+                                Text("Spent: ${Formatters.formatInr(sum)} · Share: ${pct.toInt()}%", color = palette.textSecondary, fontSize = 12.sp)
+                            }
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth((pct / 100f).toFloat().coerceIn(0.02f, 1f))
-                                    .fillMaxHeight()
+                                    .fillMaxWidth()
+                                    .height(6.dp)
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(palette.accent)
-                            )
+                                    .background(palette.inputBg)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth((pct / 100f).toFloat().coerceIn(0.02f, 1f))
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(palette.accent)
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        Text("Tip: Swipe left on any expense card to Edit or Delete", color = palette.textMuted, fontSize = 11.5.sp)
+        item(key = "tip") {
+            Text("Tip: Swipe left on any expense card to Edit or Delete", color = palette.textMuted, fontSize = 11.5.sp)
+        }
 
         if (periodExpenses.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxWidth().noorCard(palette).padding(22.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No expenses recorded in this period.", color = palette.textSecondary, fontSize = 13.5.sp)
+            item(key = "empty") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().noorCard(palette).padding(22.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No expenses recorded in this period.", color = palette.textSecondary, fontSize = 13.5.sp)
+                }
             }
         } else {
-            periodExpenses.forEach { exp ->
+            items(periodExpenses, key = { it.id }) { exp ->
                 SwipeActionCard(
                     onEdit = {
                         editingId = exp.id
@@ -274,7 +285,6 @@ fun ExpensesScreen(
                 }
             }
         }
-        Spacer(Modifier.height(96.dp))
     }
 
     deleteTarget?.let { target ->

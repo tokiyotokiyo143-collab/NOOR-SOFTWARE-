@@ -19,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,10 +30,14 @@ import com.example.ui.components.NoorPrimaryButton
 import com.example.ui.components.NoorSecondaryButton
 import com.example.ui.theme.LocalNoorColors
 import com.example.ui.theme.noorCard
-import com.example.util.BarcodeUtils
 import com.example.util.Formatters
 import com.example.util.PdfAndPrintHelper
 import com.example.util.WhatsAppHelper
+import com.example.util.rememberCachedDataUrlBitmap
+import com.example.util.rememberCachedQrBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun InvoicePrintPreviewDialog(
@@ -44,16 +47,18 @@ fun InvoicePrintPreviewDialog(
 ) {
     val palette = LocalNoorColors.current
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var paperSize by remember { mutableStateOf("A4") } // A4 | 80mm | 58mm
     var copyLabel by remember { mutableStateOf("Customer Copy") }
 
-    val logoBmp = remember(settings.logoDataUrl) { PdfAndPrintHelper.decodeDataUrlBitmap(settings.logoDataUrl) }
-    val qrBmp = remember(settings.upiQrDataUrl, settings.upiId, invoice.balanceDue, invoice.grandTotal) {
-        PdfAndPrintHelper.decodeDataUrlBitmap(settings.upiQrDataUrl) ?: if (settings.upiId.isNotBlank()) {
-            val amt = if (invoice.balanceDue > 0) invoice.balanceDue else invoice.grandTotal
-            BarcodeUtils.generateQrBitmap("upi://pay?pa=${settings.upiId}&pn=${settings.shopName}&am=$amt&cu=INR", 180)
-        } else null
-    }
+    val logoBmp = rememberCachedDataUrlBitmap(settings.logoDataUrl)
+    val uploadedQr = rememberCachedDataUrlBitmap(settings.upiQrDataUrl)
+    val upiAmt = if (invoice.balanceDue > 0) invoice.balanceDue else invoice.grandTotal
+    val qrUri = if (settings.upiQrDataUrl.isBlank() && settings.upiId.isNotBlank()) {
+        "upi://pay?pa=${settings.upiId}&pn=${settings.shopName}&am=$upiAmt&cu=INR"
+    } else ""
+    val generatedQr = rememberCachedQrBitmap(qrUri, 180)
+    val qrBmp = uploadedQr ?: generatedQr
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -91,7 +96,7 @@ fun InvoicePrintPreviewDialog(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (logoBmp != null) {
-                        Image(bitmap = logoBmp.asImageBitmap(), contentDescription = "Shop Logo", modifier = Modifier.size(40.dp))
+                        Image(bitmap = logoBmp, contentDescription = "Shop Logo", modifier = Modifier.size(40.dp))
                     }
                     Column {
                         Text(settings.shopName, color = Color.Black, fontWeight = FontWeight.Black, fontSize = 15.sp)
@@ -174,7 +179,7 @@ fun InvoicePrintPreviewDialog(
 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
                     if (qrBmp != null) {
-                        Image(bitmap = qrBmp.asImageBitmap(), contentDescription = "UPI QR", modifier = Modifier.size(64.dp))
+                        Image(bitmap = qrBmp, contentDescription = "UPI QR", modifier = Modifier.size(64.dp))
                         Column {
                             Text("Scan & Pay via UPI", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             if (settings.upiId.isNotBlank()) Text(settings.upiId, color = Color.DarkGray, fontSize = 10.sp)
@@ -199,9 +204,13 @@ fun InvoicePrintPreviewDialog(
                     text = "Print / PDF",
                     icon = Icons.Outlined.Print,
                     onClick = {
-                        val file = PdfAndPrintHelper.generateInvoicePdf(context, invoice, settings, paperSize, copyLabel)
-                        if (file != null) PdfAndPrintHelper.printPdfFile(context, file, "Bill ${invoice.invoiceNumber}")
-                        else Toast.makeText(context, "Could not generate PDF bill.", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                PdfAndPrintHelper.generateInvoicePdf(context, invoice, settings, paperSize, copyLabel)
+                            }
+                            if (file != null) PdfAndPrintHelper.printPdfFile(context, file, "Bill ${invoice.invoiceNumber}")
+                            else Toast.makeText(context, "Could not generate PDF bill.", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     modifier = Modifier.weight(1f)
                 )
@@ -209,9 +218,13 @@ fun InvoicePrintPreviewDialog(
                     text = "Share PDF / WhatsApp",
                     icon = Icons.Outlined.Share,
                     onClick = {
-                        val file = PdfAndPrintHelper.generateInvoicePdf(context, invoice, settings, paperSize, copyLabel)
-                        if (file != null) PdfAndPrintHelper.sharePdfFile(context, file, "Bill ${invoice.invoiceNumber}")
-                        else Toast.makeText(context, "Could not generate PDF bill.", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                PdfAndPrintHelper.generateInvoicePdf(context, invoice, settings, paperSize, copyLabel)
+                            }
+                            if (file != null) PdfAndPrintHelper.sharePdfFile(context, file, "Bill ${invoice.invoiceNumber}")
+                            else Toast.makeText(context, "Could not generate PDF bill.", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     modifier = Modifier.weight(1.3f)
                 )
@@ -228,6 +241,7 @@ fun PrintSalesHistoryDialog(
 ) {
     val palette = LocalNoorColors.current
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var period by remember { mutableStateOf("This Month") }
     var fromDate by remember { mutableStateOf(Formatters.todayIso()) }
     var toDate by remember { mutableStateOf(Formatters.todayIso()) }
@@ -312,8 +326,12 @@ fun PrintSalesHistoryDialog(
                             add("-".repeat(76))
                             add("Totals (Active Posting Bills): ${activePosting.size} bills | Net: ${Formatters.formatInr(netSales)} | Collected: ${Formatters.formatInr(collected)}")
                         }
-                        val pdf = PdfAndPrintHelper.generateTextReportPdf(context, "Sales History Statement", "Period: $period · Format: $formatChoice", lines, settings)
-                        if (pdf != null) PdfAndPrintHelper.printPdfFile(context, pdf, "Sales History Statement")
+                        scope.launch {
+                            val pdf = withContext(Dispatchers.IO) {
+                                PdfAndPrintHelper.generateTextReportPdf(context, "Sales History Statement", "Period: $period · Format: $formatChoice", lines, settings)
+                            }
+                            if (pdf != null) PdfAndPrintHelper.printPdfFile(context, pdf, "Sales History Statement")
+                        }
                     },
                     modifier = Modifier.weight(1.4f)
                 )

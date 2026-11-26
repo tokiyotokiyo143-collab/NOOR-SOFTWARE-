@@ -196,6 +196,7 @@ fun SwipeActionCard(
     val palette = LocalNoorColors.current
     val haptic = LocalHapticFeedback.current
     var showActions by remember { mutableStateOf(false) }
+    val currentHaptic by rememberUpdatedState(haptic)
 
     Column(
         modifier = Modifier
@@ -204,7 +205,7 @@ fun SwipeActionCard(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onLongPress = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        currentHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         showActions = !showActions
                     }
                 )
@@ -217,7 +218,7 @@ fun SwipeActionCard(
                         totalDragX += dragAmount
                         if (totalDragX < -55f && !showActions) {
                             showActions = true
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            currentHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         } else if (totalDragX > 55f && showActions) {
                             showActions = false
                         }
@@ -423,7 +424,8 @@ fun MobileTopBar(
 
         if (isSearchActive && query.isNotBlank()) {
             val hits = remember(query, items) {
-                items.filter { Formatters.matchesStockQuery(it, query) }.take(40)
+                val tokens = Formatters.tokenizeQuery(query)
+                items.filter { Formatters.matchesStockQueryTokens(it, tokens) }.take(40)
             }
             LazyColumn(
                 modifier = Modifier
@@ -599,5 +601,43 @@ fun EdgeStepArrowButton(
             tint = palette.textSecondary,
             modifier = Modifier.size(20.dp)
         )
+    }
+}
+
+@Composable
+fun SidebarCollapseHandle(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalNoorColors.current
+    val pillShape = RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp)
+    Box(
+        modifier = modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 56.dp)
+            .clickable(onClick = onToggle)
+            .testTag("sidebar_collapse_toggle"),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 24.dp, height = 52.dp)
+                .shadow(4.dp, pillShape)
+                .clip(pillShape)
+                .background(palette.card.copy(alpha = 0.94f))
+                .border(1.dp, palette.border, pillShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (expanded) {
+                    Icons.AutoMirrored.Outlined.KeyboardArrowLeft
+                } else {
+                    Icons.AutoMirrored.Outlined.KeyboardArrowRight
+                },
+                contentDescription = if (expanded) "Collapse sidebar" else "Expand sidebar",
+                tint = palette.textPrimary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
     }
 }

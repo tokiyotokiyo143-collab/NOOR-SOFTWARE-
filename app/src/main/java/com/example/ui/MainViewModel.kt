@@ -10,10 +10,12 @@ import com.example.data.model.*
 import com.example.data.remote.FirebaseManager
 import com.example.data.repository.ShopRepository
 import com.example.util.Formatters
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -78,6 +80,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isModalOpen = MutableStateFlow(false)
     val isModalOpen: StateFlow<Boolean> = _isModalOpen.asStateFlow()
 
+    private val _isSidebarExpanded = MutableStateFlow(true)
+    val isSidebarExpanded: StateFlow<Boolean> = _isSidebarExpanded.asStateFlow()
+
     // ---------------- LIVE DRAFTS ----------------
 
     private val _saleDraft = MutableStateFlow(SaleDraftState())
@@ -122,30 +127,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun evaluateSessionOnStartup() {
-        val fbAuth = FirebaseManager.auth(app)
-        val fbUser = fbAuth.currentUser
-        if (fbUser != null && !fbUser.email.isNullOrBlank()) {
-            val session = OfflineUserSession(
-                uid = fbUser.uid,
-                email = fbUser.email!!.lowercase(),
-                displayName = fbUser.displayName.orEmpty(),
-                emailVerified = fbUser.isEmailVerified
-            )
-            secretStore.saveOfflineSession(session)
-            resolveUserAccess(session)
-        } else {
-            val offline = secretStore.getOfflineSession()
-            if (offline != null && offline.email.isNotBlank()) {
-                resolveUserAccess(offline)
-            } else {
-                _authState.value = AuthGateState.SignedOut
+        viewModelScope.launch {
+            val fbUser = withContext(Dispatchers.IO) {
+                runCatching { FirebaseManager.auth(app).currentUser }.getOrNull()
             }
-        }
-        if (secretStore.getDevicePin().isNotBlank() && _authState.value is AuthGateState.Ready) {
-            _isPinLocked.value = true
-        }
-        if (!secretStore.isFirstLaunchPromptShown() && repo.items.value.isEmpty() && repo.invoices.value.isEmpty()) {
-            _showFirstLaunchBackupDialog.value = true
+            if (fbUser != null && !fbUser.email.isNullOrBlank()) {
+                val session = OfflineUserSession(
+                    uid = fbUser.uid,
+                    email = fbUser.email!!.lowercase(),
+                    displayName = fbUser.displayName.orEmpty(),
+                    emailVerified = fbUser.isEmailVerified
+                )
+                withContext(Dispatchers.IO) { secretStore.saveOfflineSession(session) }
+                resolveUserAccess(session)
+            } else {
+                val offline = withContext(Dispatchers.IO) { secretStore.getOfflineSession() }
+                if (offline != null && offline.email.isNotBlank()) {
+                    resolveUserAccess(offline)
+                } else {
+                    _authState.value = AuthGateState.SignedOut
+                }
+            }
+            val (pin, promptShown) = withContext(Dispatchers.IO) {
+                secretStore.getDevicePin() to secretStore.isFirstLaunchPromptShown()
+            }
+            if (pin.isNotBlank() && _authState.value is AuthGateState.Ready) {
+                _isPinLocked.value = true
+            }
+            if (!promptShown && repo.items.value.isEmpty() && repo.invoices.value.isEmpty()) {
+                _showFirstLaunchBackupDialog.value = true
+            }
         }
     }
 
@@ -188,8 +199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_authState.value !is AuthGateState.Ready) return
         val freq = repo.settings.value.duesReminderFreq
         if (freq == "off") return
-        val dueParties = repo.parties.value
-            .map { repo.computePartySummary(it) }
+        val dueParties = repo.analytics.value.partySummaries
             .filter { it.receivableBalance > 0.0 }
         if (dueParties.isEmpty()) return
 
@@ -529,6 +539,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setShowCompaniesSheet(show: Boolean) { _showCompaniesSheet.value = show }
     fun setShowQuickCreateSheet(show: Boolean) { _showQuickCreateSheet.value = show }
     fun setModalOpen(open: Boolean) { _isModalOpen.value = open }
+    fun setSidebarExpanded(expanded: Boolean) { _isSidebarExpanded.value = expanded }
+    fun toggleSidebar() { _isSidebarExpanded.value = !_isSidebarExpanded.value }
 
     fun showBanner(msg: String) {
         _globalBannerMessage.value = msg

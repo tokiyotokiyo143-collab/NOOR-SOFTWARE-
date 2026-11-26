@@ -17,6 +17,58 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+data class ItemSoldSummary(
+    val soldQty: Int = 0,
+    val lastInvoiceNumber: String = "",
+    val lastSaleDate: String = ""
+)
+
+data class ShopAnalyticsSnapshot(
+    val cashInHand: Double = 0.0,
+    val openingCashToday: Double = 0.0,
+    val openingCashDate: String = "",
+    val bankBalance: Double = 0.0,
+    val partySummaries: List<ShopRepository.PartyBalanceSummary> = emptyList(),
+    val partySummaryById: Map<String, ShopRepository.PartyBalanceSummary> = emptyMap(),
+    val totalReceivables: Double = 0.0,
+    val totalPayables: Double = 0.0,
+    val soldStatsByItemId: Map<String, ItemSoldSummary> = emptyMap(),
+    val soldItemIds: Set<String> = emptySet()
+)
+
+private class CachedPayloadDecoder<T : Any>(
+    private val decode: (JSONObject) -> T
+) {
+    private val cache = ConcurrentHashMap<String, Pair<String, T>>()
+
+    fun decodeAll(rows: List<Pair<String, String>>): List<T> {
+        val activeIds = HashSet<String>(rows.size * 2)
+        val result = ArrayList<T>(rows.size)
+        for ((id, payload) in rows) {
+            activeIds.add(id)
+            val cached = cache[id]
+            if (cached != null && cached.first == payload) {
+                result.add(cached.second)
+            } else {
+                val parsed = runCatching { decode(JSONObject(payload)) }.getOrNull()
+                if (parsed != null) {
+                    cache[id] = payload to parsed
+                    result.add(parsed)
+                }
+            }
+        }
+        if (cache.size > activeIds.size) {
+            cache.keys.retainAll(activeIds)
+        }
+        return result
+    }
+
+    fun clear() {
+        cache.clear()
+    }
+}
 
 class ShopRepository(
     private val context: Context,
@@ -88,13 +140,17 @@ class ShopRepository(
         onRemoteOwnerCosts = { costs ->
             _ownerCosts.value = costs
             if (isOwnerOrCoOwnerSession && costs.isNotEmpty()) {
+                val changed = mutableListOf<StockItem>()
                 val updated = _items.value.map { item ->
                     val realCost = costs[item.id]
                     if (realCost != null && item.costPrice != realCost) {
                         val copy = item.copy(costPrice = realCost)
-                        db.itemDao().upsert(copy.toEntity())
+                        changed.add(copy)
                         copy
                     } else item
+                }
+                if (changed.isNotEmpty()) {
+                    db.itemDao().upsertAll(changed.map { it.toEntity() })
                 }
                 _items.value = updated
             }
@@ -133,6 +189,52 @@ class ShopRepository(
 
     val syncStatus: StateFlow<SyncStatusState> = syncEngine.status
 
+    private val itemDecoder = CachedPayloadDecoder { BackupJsonCodec.itemFromJson(it) }
+    private val invoiceDecoder = CachedPayloadDecoder { BackupJsonCodec.invoiceFromJson(it) }
+    private val purchaseDecoder = CachedPayloadDecoder { BackupJsonCodec.purchaseFromJson(it) }
+    private val partyDecoder = CachedPayloadDecoder { BackupJsonCodec.partyFromJson(it) }
+    private val paymentDecoder = CachedPayloadDecoder { BackupJsonCodec.paymentFromJson(it) }
+    private val expenseDecoder = CachedPayloadDecoder { BackupJsonCodec.expenseFromJson(it) }
+    private val repairDecoder = CachedPayloadDecoder { BackupJsonCodec.repairFromJson(it) }
+    private val bankDecoder = CachedPayloadDecoder { BackupJsonCodec.bankAccountFromJson(it) }
+    private val cashBankDecoder = CachedPayloadDecoder { BackupJsonCodec.cashBankTxnFromJson(it) }
+    private val shopDayDecoder = CachedPayloadDecoder { BackupJsonCodec.shopDayFromJson(it) }
+
+    private data class AnalyticsPartA(
+        val settings: ShopSettings,
+        val items: List<StockItem>,
+        val invoices: List<Invoice>,
+        val purchases: List<Purchase>,
+        val parties: List<Party>
+    )
+
+    private data class AnalyticsPartB(
+        val payments: List<PaymentRecord>,
+        val expenses: List<ExpenseRecord>,
+        val repairs: List<RepairJob>,
+        val bankAccounts: List<BankAccount>,
+        val cashBankTxns: List<CashBankTxn>
+    )
+
+    val analytics: StateFlow<ShopAnalyticsSnapshot> = combine(
+        combine(_settings, _items, _invoices, _purchases, _parties, ::AnalyticsPartA),
+        combine(_payments, _expenses, _repairs, _bankAccounts, _cashBankTxns, ::AnalyticsPartB)
+    ) { a, b ->
+        computeAnalyticsSnapshot(
+            settings = a.settings,
+            invoices = a.invoices,
+            purchases = a.purchases,
+            parties = a.parties,
+            payments = b.payments,
+            expenses = b.expenses,
+            repairs = b.repairs,
+            bankAccounts = b.bankAccounts,
+            cashBankTxns = b.cashBankTxns
+        )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(scope, SharingStarted.Eagerly, ShopAnalyticsSnapshot())
+
     init {
         attachDatabaseObservers()
     }
@@ -145,6 +247,17 @@ class ShopRepository(
 
     private fun attachDatabaseObservers() {
         dbCollectJob?.cancel()
+        itemDecoder.clear()
+        invoiceDecoder.clear()
+        purchaseDecoder.clear()
+        partyDecoder.clear()
+        paymentDecoder.clear()
+        expenseDecoder.clear()
+        repairDecoder.clear()
+        bankDecoder.clear()
+        cashBankDecoder.clear()
+        shopDayDecoder.clear()
+
         dbCollectJob = scope.launch {
             launch {
                 db.kvDao().observe("settings").collect { kv ->
@@ -156,72 +269,52 @@ class ShopRepository(
             }
             launch {
                 db.itemDao().observeAll().collect { rows ->
-                    _items.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.itemFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _items.value = itemDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.invoiceDao().observeAll().collect { rows ->
-                    _invoices.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.invoiceFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _invoices.value = invoiceDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.purchaseDao().observeAll().collect { rows ->
-                    _purchases.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.purchaseFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _purchases.value = purchaseDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.partyDao().observeAll().collect { rows ->
-                    _parties.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.partyFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _parties.value = partyDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.paymentDao().observeAll().collect { rows ->
-                    _payments.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.paymentFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _payments.value = paymentDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.expenseDao().observeAll().collect { rows ->
-                    _expenses.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.expenseFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _expenses.value = expenseDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.repairDao().observeAll().collect { rows ->
-                    _repairs.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.repairFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _repairs.value = repairDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.bankAccountDao().observeAll().collect { rows ->
-                    _bankAccounts.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.bankAccountFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _bankAccounts.value = bankDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.cashBankTxnDao().observeAll().collect { rows ->
-                    _cashBankTxns.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.cashBankTxnFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _cashBankTxns.value = cashBankDecoder.decodeAll(rows.map { it.id to it.jsonPayload })
                 }
             }
             launch {
                 db.shopDayDao().observeAll().collect { rows ->
-                    _shopDays.value = rows.mapNotNull {
-                        runCatching { BackupJsonCodec.shopDayFromJson(JSONObject(it.jsonPayload)) }.getOrNull()
-                    }
+                    _shopDays.value = shopDayDecoder.decodeAll(rows.map { it.date to it.jsonPayload })
                 }
             }
             launch {
@@ -286,22 +379,34 @@ class ShopRepository(
 
     // ---------------- STOCK ITEMS ----------------
 
+    private fun clampItem(item: StockItem): StockItem = item.copy(
+        category = Formatters.clampName(item.category),
+        brand = Formatters.clampName(item.brand),
+        model = Formatters.clampName(item.model),
+        color = Formatters.clampName(item.color),
+        alsoFits = Formatters.clampNotes(item.alsoFits),
+        barcode = Formatters.clampName(item.barcode),
+        imei = if (item.imei.isBlank()) "" else Formatters.clampImei(item.imei),
+        costPrice = Formatters.clampAmount(item.costPrice),
+        sellingPrice = Formatters.clampAmount(item.sellingPrice),
+        pieces = item.pieces.coerceAtLeast(0),
+        updatedAt = System.currentTimeMillis()
+    )
+
     suspend fun saveItem(item: StockItem, isOwner: Boolean) {
-        val clamped = item.copy(
-            category = Formatters.clampName(item.category),
-            brand = Formatters.clampName(item.brand),
-            model = Formatters.clampName(item.model),
-            color = Formatters.clampName(item.color),
-            alsoFits = Formatters.clampNotes(item.alsoFits),
-            barcode = Formatters.clampName(item.barcode),
-            imei = if (item.imei.isBlank()) "" else Formatters.clampImei(item.imei),
-            costPrice = Formatters.clampAmount(item.costPrice),
-            sellingPrice = Formatters.clampAmount(item.sellingPrice),
-            pieces = item.pieces.coerceAtLeast(0),
-            updatedAt = System.currentTimeMillis()
-        )
+        val clamped = clampItem(item)
         db.itemDao().upsert(clamped.toEntity())
         syncEngine.pushItem(clamped, _settings.value, isOwner)
+    }
+
+    suspend fun saveItemsBatch(items: List<StockItem>, isOwner: Boolean) {
+        if (items.isEmpty()) return
+        val clamped = items.map { clampItem(it) }
+        db.itemDao().upsertAll(clamped.map { it.toEntity() })
+        val curSettings = _settings.value
+        scope.launch {
+            clamped.forEach { syncEngine.pushItem(it, curSettings, isOwner) }
+        }
     }
 
     suspend fun adjustStock(itemId: String, mode: String, qty: Int, isOwner: Boolean) {
@@ -567,12 +672,13 @@ class ShopRepository(
         }
         if (sign == 0) return
 
+        val itemsToUpdate = mutableListOf<StockItem>()
         for (line in inv.items) {
             if (!line.isService && !line.itemId.isNullOrBlank()) {
                 val stock = _items.value.find { it.id == line.itemId } ?: continue
                 if (!stock.isService) {
                     val updatedPieces = (stock.pieces + sign * line.qty).coerceAtLeast(0)
-                    saveItem(stock.copy(pieces = updatedPieces), isOwner)
+                    itemsToUpdate.add(stock.copy(pieces = updatedPieces))
                 }
             }
         }
@@ -583,9 +689,12 @@ class ShopRepository(
                 val stock = _items.value.find { it.id == inv.linkedPartItemId }
                 if (stock != null && !stock.isService) {
                     val updatedPieces = (stock.pieces + sign).coerceAtLeast(0)
-                    saveItem(stock.copy(pieces = updatedPieces), isOwner)
+                    itemsToUpdate.add(stock.copy(pieces = updatedPieces))
                 }
             }
+        }
+        if (itemsToUpdate.isNotEmpty()) {
+            saveItemsBatch(itemsToUpdate, isOwner)
         }
     }
 
@@ -678,32 +787,38 @@ class ShopRepository(
 
     private suspend fun applyPurchaseStockDelta(purchase: Purchase, reverse: Boolean, isOwner: Boolean) {
         val sign = if (reverse) -1 else +1
+        val itemsToSave = mutableListOf<StockItem>()
         for (line in purchase.items) {
             if (line.model.isBlank()) continue
             val existing = line.itemId?.let { id -> _items.value.find { it.id == id } }
                 ?: findDuplicateItem(line.category, line.brand, line.model, line.color)
             if (existing != null) {
-                val updated = existing.copy(
-                    pieces = (existing.pieces + sign * line.qty).coerceAtLeast(0),
-                    costPrice = if (!reverse && line.buyPrice > 0) line.buyPrice else existing.costPrice,
-                    sellingPrice = if (!reverse && line.sellPrice > 0) line.sellPrice else existing.sellingPrice,
-                    barcode = existing.barcode.ifBlank { line.barcode }
+                itemsToSave.add(
+                    existing.copy(
+                        pieces = (existing.pieces + sign * line.qty).coerceAtLeast(0),
+                        costPrice = if (!reverse && line.buyPrice > 0) line.buyPrice else existing.costPrice,
+                        sellingPrice = if (!reverse && line.sellPrice > 0) line.sellPrice else existing.sellingPrice,
+                        barcode = existing.barcode.ifBlank { line.barcode }
+                    )
                 )
-                saveItem(updated, isOwner)
             } else if (!reverse) {
-                val created = StockItem(
-                    category = line.category.ifBlank { "Accessories" },
-                    brand = line.brand,
-                    model = line.model,
-                    color = line.color,
-                    barcode = line.barcode,
-                    costPrice = line.buyPrice,
-                    sellingPrice = line.sellPrice,
-                    pieces = line.qty,
-                    lowStockAlert = _settings.value.lowStockDefault
+                itemsToSave.add(
+                    StockItem(
+                        category = line.category.ifBlank { "Accessories" },
+                        brand = line.brand,
+                        model = line.model,
+                        color = line.color,
+                        barcode = line.barcode,
+                        costPrice = line.buyPrice,
+                        sellingPrice = line.sellPrice,
+                        pieces = line.qty,
+                        lowStockAlert = _settings.value.lowStockDefault
+                    )
                 )
-                saveItem(created, isOwner)
             }
+        }
+        if (itemsToSave.isNotEmpty()) {
+            saveItemsBatch(itemsToSave, isOwner)
         }
     }
 
@@ -995,72 +1110,273 @@ class ShopRepository(
 
     // ---------------- LEDGER & BALANCE CALCULATIONS ----------------
 
-    fun computeCashInHand(beforeDateExclusive: String? = null): Double {
-        var cash = _settings.value.openingCashBalance
-        val dateOk: (String) -> Boolean = { d -> beforeDateExclusive == null || d < beforeDateExclusive }
+    private fun computeAnalyticsSnapshot(
+        settings: ShopSettings,
+        invoices: List<Invoice>,
+        purchases: List<Purchase>,
+        parties: List<Party>,
+        payments: List<PaymentRecord>,
+        expenses: List<ExpenseRecord>,
+        repairs: List<RepairJob>,
+        bankAccounts: List<BankAccount>,
+        cashBankTxns: List<CashBankTxn>
+    ): ShopAnalyticsSnapshot {
+        val today = Formatters.todayIso()
+        val cashAll = computeCashInHandInternal(
+            openingCashBalance = settings.openingCashBalance,
+            invoices = invoices,
+            purchases = purchases,
+            payments = payments,
+            expenses = expenses,
+            repairs = repairs,
+            cashBankTxns = cashBankTxns,
+            beforeDateExclusive = null
+        )
+        val cashBeforeToday = computeCashInHandInternal(
+            openingCashBalance = settings.openingCashBalance,
+            invoices = invoices,
+            purchases = purchases,
+            payments = payments,
+            expenses = expenses,
+            repairs = repairs,
+            cashBankTxns = cashBankTxns,
+            beforeDateExclusive = today
+        )
+        val bankBal = computeBankBalanceInternal(
+            bankAccounts = bankAccounts,
+            invoices = invoices,
+            purchases = purchases,
+            payments = payments,
+            expenses = expenses,
+            cashBankTxns = cashBankTxns
+        )
 
-        _invoices.value.filter { it.status == "active" && dateOk(it.date) }.forEach { inv ->
-            if (inv.paymentMode.equals("Cash", true)) {
-                if (inv.docType == "invoice") cash += inv.amountPaid
-                else if (inv.docType == "return") cash -= inv.amountPaid
+        // O(N) indexed Party ledger calculation
+        val nParties = parties.size
+        val partyIndexById = HashMap<String, Int>(nParties * 2)
+        val partyIndicesByLowerName = HashMap<String, MutableList<Int>>(nParties * 2)
+        for (i in 0 until nParties) {
+            val p = parties[i]
+            partyIndexById[p.id] = i
+            val normName = p.name.trim().lowercase()
+            if (normName.isNotEmpty()) {
+                partyIndicesByLowerName.getOrPut(normName) { mutableListOf() }.add(i)
             }
         }
-        _purchases.value.filter { it.status == "active" && dateOk(it.date) }.forEach { p ->
-            if (p.paymentMode.equals("Cash", true)) {
-                if (p.docType == "purchase") cash -= p.amountPaid
-                else if (p.docType == "return") cash += p.amountPaid
+
+        val invDueArr = DoubleArray(nParties)
+        val oldestDateArr = arrayOfNulls<String>(nParties)
+        val unbilledRepDueArr = DoubleArray(nParties)
+        val purDueArr = DoubleArray(nParties)
+        val payInArr = DoubleArray(nParties)
+        val payOutArr = DoubleArray(nParties)
+
+        fun forMatchedParties(id: String?, name: String, block: (Int) -> Unit) {
+            val directIdx = if (!id.isNullOrBlank()) partyIndexById[id] else null
+            if (directIdx != null) block(directIdx)
+            val byName = partyIndicesByLowerName[name.trim().lowercase()]
+            if (byName != null) {
+                for (idx in byName) {
+                    if (idx != directIdx) block(idx)
+                }
             }
         }
-        _payments.value.filter { dateOk(it.date) }.forEach { pay ->
-            if (pay.paymentMode.equals("Cash", true)) {
-                if (pay.direction == "in") cash += pay.amount else cash -= pay.amount
+
+        // Sold stats by itemId in the same invoice pass
+        val soldQtyMap = HashMap<String, Int>(128)
+        val lastInvNumMap = HashMap<String, String>(128)
+        val lastInvDateMap = HashMap<String, String>(128)
+
+        for (inv in invoices) {
+            if (inv.status != "active") continue
+            val deltaDue = when (inv.docType) {
+                "invoice" -> inv.balanceDue
+                "return" -> -inv.balanceDue
+                else -> 0.0
+            }
+            forMatchedParties(inv.customerId, inv.customerName) { idx ->
+                invDueArr[idx] += deltaDue
+                if (inv.docType == "invoice" && inv.balanceDue > 0.0) {
+                    val cur = oldestDateArr[idx]
+                    if (cur == null || inv.date < cur) oldestDateArr[idx] = inv.date
+                }
+            }
+            if (inv.docType == "invoice") {
+                for (line in inv.items) {
+                    val itemId = line.itemId ?: continue
+                    soldQtyMap[itemId] = (soldQtyMap[itemId] ?: 0) + line.qty
+                    val prevDate = lastInvDateMap[itemId]
+                    if (prevDate == null || inv.date > prevDate) {
+                        lastInvDateMap[itemId] = inv.date
+                        lastInvNumMap[itemId] = inv.invoiceNumber
+                    }
+                }
             }
         }
-        _expenses.value.filter { dateOk(it.date) }.forEach { exp ->
-            if (exp.paymentMode.equals("Cash", true)) {
-                cash -= exp.amount
+
+        for (rep in repairs) {
+            if (rep.billedInvoiceId == null) {
+                forMatchedParties(rep.customerId, rep.customerName) { idx ->
+                    unbilledRepDueArr[idx] += rep.balanceDue
+                }
             }
         }
-        // Cash advances on unbilled repairs
-        _repairs.value.filter { it.billedInvoiceId == null && dateOk(it.date) }.forEach { rep ->
-            if (rep.billingPaymentMode.equals("Cash", true)) {
-                cash += rep.advancePaid
+
+        for (p in purchases) {
+            if (p.status != "active") continue
+            val deltaDue = when (p.docType) {
+                "purchase" -> p.balanceDue
+                "return" -> -p.balanceDue
+                else -> 0.0
+            }
+            forMatchedParties(p.supplierId, p.supplierName) { idx ->
+                purDueArr[idx] += deltaDue
             }
         }
-        _cashBankTxns.value.filter { dateOk(it.date) }.forEach { txn ->
-            when (txn.type) {
-                "cash_in", "bank_withdraw" -> cash += txn.amount
-                "cash_out", "bank_deposit" -> cash -= txn.amount
+
+        for (pay in payments) {
+            forMatchedParties(pay.partyId, pay.partyName) { idx ->
+                if (pay.direction == "in") payInArr[idx] += pay.amount else payOutArr[idx] += pay.amount
+            }
+        }
+
+        val summaries = ArrayList<PartyBalanceSummary>(nParties)
+        val summaryById = HashMap<String, PartyBalanceSummary>(nParties * 2)
+        var totalRecSum = 0.0
+        var totalPaySum = 0.0
+        for (i in 0 until nParties) {
+            val party = parties[i]
+            val totalRec = party.openingReceivable + invDueArr[i] + unbilledRepDueArr[i] - payInArr[i]
+            val totalPay = party.openingPayable + purDueArr[i] - payOutArr[i]
+            val recClamped = totalRec.coerceAtLeast(0.0)
+            val payClamped = totalPay.coerceAtLeast(0.0)
+            val summary = PartyBalanceSummary(
+                party = party,
+                receivableBalance = recClamped,
+                payableBalance = payClamped,
+                netBalance = totalRec - totalPay,
+                oldestDueDate = oldestDateArr[i] ?: today
+            )
+            summaries.add(summary)
+            summaryById[party.id] = summary
+            totalRecSum += recClamped
+            totalPaySum += payClamped
+        }
+
+        val soldStats = HashMap<String, ItemSoldSummary>(soldQtyMap.size * 2)
+        for ((itemId, qty) in soldQtyMap) {
+            soldStats[itemId] = ItemSoldSummary(
+                soldQty = qty,
+                lastInvoiceNumber = lastInvNumMap[itemId].orEmpty(),
+                lastSaleDate = lastInvDateMap[itemId].orEmpty()
+            )
+        }
+
+        return ShopAnalyticsSnapshot(
+            cashInHand = cashAll,
+            openingCashToday = cashBeforeToday,
+            openingCashDate = today,
+            bankBalance = bankBal,
+            partySummaries = summaries,
+            partySummaryById = summaryById,
+            totalReceivables = totalRecSum,
+            totalPayables = totalPaySum,
+            soldStatsByItemId = soldStats,
+            soldItemIds = soldStats.keys
+        )
+    }
+
+    private fun computeCashInHandInternal(
+        openingCashBalance: Double,
+        invoices: List<Invoice>,
+        purchases: List<Purchase>,
+        payments: List<PaymentRecord>,
+        expenses: List<ExpenseRecord>,
+        repairs: List<RepairJob>,
+        cashBankTxns: List<CashBankTxn>,
+        beforeDateExclusive: String?
+    ): Double {
+        var cash = openingCashBalance
+        for (inv in invoices) {
+            if (inv.status == "active" && (beforeDateExclusive == null || inv.date < beforeDateExclusive)) {
+                if (inv.paymentMode.equals("Cash", true)) {
+                    if (inv.docType == "invoice") cash += inv.amountPaid
+                    else if (inv.docType == "return") cash -= inv.amountPaid
+                }
+            }
+        }
+        for (p in purchases) {
+            if (p.status == "active" && (beforeDateExclusive == null || p.date < beforeDateExclusive)) {
+                if (p.paymentMode.equals("Cash", true)) {
+                    if (p.docType == "purchase") cash -= p.amountPaid
+                    else if (p.docType == "return") cash += p.amountPaid
+                }
+            }
+        }
+        for (pay in payments) {
+            if (beforeDateExclusive == null || pay.date < beforeDateExclusive) {
+                if (pay.paymentMode.equals("Cash", true)) {
+                    if (pay.direction == "in") cash += pay.amount else cash -= pay.amount
+                }
+            }
+        }
+        for (exp in expenses) {
+            if (beforeDateExclusive == null || exp.date < beforeDateExclusive) {
+                if (exp.paymentMode.equals("Cash", true)) {
+                    cash -= exp.amount
+                }
+            }
+        }
+        for (rep in repairs) {
+            if (rep.billedInvoiceId == null && (beforeDateExclusive == null || rep.date < beforeDateExclusive)) {
+                if (rep.billingPaymentMode.equals("Cash", true)) {
+                    cash += rep.advancePaid
+                }
+            }
+        }
+        for (txn in cashBankTxns) {
+            if (beforeDateExclusive == null || txn.date < beforeDateExclusive) {
+                when (txn.type) {
+                    "cash_in", "bank_withdraw" -> cash += txn.amount
+                    "cash_out", "bank_deposit" -> cash -= txn.amount
+                }
             }
         }
         return cash
     }
 
-    fun computeBankBalance(): Double {
-        var bank = _bankAccounts.value.sumOf { it.openingBalance }
-        _invoices.value.filter { it.status == "active" }.forEach { inv ->
-            if (!inv.paymentMode.equals("Cash", true) && !inv.paymentMode.startsWith("Credit", true)) {
+    private fun computeBankBalanceInternal(
+        bankAccounts: List<BankAccount>,
+        invoices: List<Invoice>,
+        purchases: List<Purchase>,
+        payments: List<PaymentRecord>,
+        expenses: List<ExpenseRecord>,
+        cashBankTxns: List<CashBankTxn>
+    ): Double {
+        var bank = bankAccounts.sumOf { it.openingBalance }
+        for (inv in invoices) {
+            if (inv.status == "active" && !inv.paymentMode.equals("Cash", true) && !inv.paymentMode.startsWith("Credit", true)) {
                 if (inv.docType == "invoice") bank += inv.amountPaid
                 else if (inv.docType == "return") bank -= inv.amountPaid
             }
         }
-        _purchases.value.filter { it.status == "active" }.forEach { p ->
-            if (!p.paymentMode.equals("Cash", true) && !p.paymentMode.startsWith("Credit", true)) {
+        for (p in purchases) {
+            if (p.status == "active" && !p.paymentMode.equals("Cash", true) && !p.paymentMode.startsWith("Credit", true)) {
                 if (p.docType == "purchase") bank -= p.amountPaid
                 else if (p.docType == "return") bank += p.amountPaid
             }
         }
-        _payments.value.forEach { pay ->
+        for (pay in payments) {
             if (!pay.paymentMode.equals("Cash", true)) {
                 if (pay.direction == "in") bank += pay.amount else bank -= pay.amount
             }
         }
-        _expenses.value.forEach { exp ->
+        for (exp in expenses) {
             if (!exp.paymentMode.equals("Cash", true)) {
                 bank -= exp.amount
             }
         }
-        _cashBankTxns.value.forEach { txn ->
+        for (txn in cashBankTxns) {
             when (txn.type) {
                 "bank_deposit" -> bank += txn.amount
                 "bank_withdraw" -> bank -= txn.amount
@@ -1068,6 +1384,30 @@ class ShopRepository(
             }
         }
         return bank
+    }
+
+    fun computeCashInHand(beforeDateExclusive: String? = null): Double {
+        return computeCashInHandInternal(
+            openingCashBalance = _settings.value.openingCashBalance,
+            invoices = _invoices.value,
+            purchases = _purchases.value,
+            payments = _payments.value,
+            expenses = _expenses.value,
+            repairs = _repairs.value,
+            cashBankTxns = _cashBankTxns.value,
+            beforeDateExclusive = beforeDateExclusive
+        )
+    }
+
+    fun computeBankBalance(): Double {
+        return computeBankBalanceInternal(
+            bankAccounts = _bankAccounts.value,
+            invoices = _invoices.value,
+            purchases = _purchases.value,
+            payments = _payments.value,
+            expenses = _expenses.value,
+            cashBankTxns = _cashBankTxns.value
+        )
     }
 
     data class PartyBalanceSummary(
@@ -1079,6 +1419,7 @@ class ShopRepository(
     )
 
     fun computePartySummary(party: Party): PartyBalanceSummary {
+        analytics.value.partySummaryById[party.id]?.let { return it }
         val invDue = _invoices.value.filter {
             it.status == "active" &&
                 (it.customerId == party.id || it.customerName.equals(party.name, true))
@@ -1243,7 +1584,7 @@ class ShopRepository(
             category = "Chargers", brand = "Boat", model = "Type-C 20W", color = "White",
             barcode = "890123450004", costPrice = 220.0, sellingPrice = 450.0, pieces = 8, lowStockAlert = 3
         )
-        listOf(item1, item2, item3, item4).forEach { saveItem(it, isOwner) }
+        saveItemsBatch(listOf(item1, item2, item3, item4), isOwner)
 
         val bank = BankAccount(name = "Indian Bank Annur", last4 = "4821", openingBalance = 25000.0, upiHandle = "annoor@okaxis")
         saveBankAccount(bank)

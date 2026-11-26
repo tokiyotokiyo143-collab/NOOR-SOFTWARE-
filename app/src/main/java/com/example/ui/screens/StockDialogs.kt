@@ -9,6 +9,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -35,6 +37,9 @@ import com.example.ui.theme.LocalNoorColors
 import com.example.ui.theme.noorCard
 import com.example.util.Formatters
 import com.example.util.PdfAndPrintHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 @Composable
@@ -352,14 +357,20 @@ fun BulkAddProductsDialog(
     var sameSell by remember { mutableStateOf("0") }
     var sameModelsList by remember { mutableStateOf("") }
 
+    val scope = rememberCoroutineScope()
     // Tab 3: CSV
     var csvText by remember { mutableStateOf("") }
     val csvPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
-            runCatching {
-                context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText().orEmpty()
-            }.onSuccess { csvText = it }
-                .onFailure { Toast.makeText(context, "Failed to parse CSV file.", Toast.LENGTH_SHORT).show() }
+            scope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    }
+                }
+                res.onSuccess { csvText = it }
+                    .onFailure { Toast.makeText(context, "Failed to parse CSV file.", Toast.LENGTH_SHORT).show() }
+            }
         }
     }
 
@@ -617,6 +628,7 @@ fun BarcodeLabelPrintDialog(
 ) {
     val palette = LocalNoorColors.current
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var search by remember { mutableStateOf("") }
     var selectedQtyMap by remember {
         mutableStateOf(
@@ -631,7 +643,8 @@ fun BarcodeLabelPrintDialog(
     var showCategory by remember { mutableStateOf(false) }
 
     val filtered = remember(allItems, search) {
-        allItems.filter { !it.isService && Formatters.matchesStockQuery(it, search) }
+        val tokens = Formatters.tokenizeQuery(search)
+        allItems.filter { !it.isService && Formatters.matchesStockQueryTokens(it, tokens) }
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -688,30 +701,35 @@ fun BarcodeLabelPrintDialog(
                     fontSize = 12.sp
                 )
             }
-            filtered.take(30).forEach { item ->
-                val checked = item.id in selectedQtyMap
-                val qty = selectedQtyMap[item.id] ?: 1
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = checked,
-                        onCheckedChange = { on ->
-                            selectedQtyMap = if (on) selectedQtyMap + (item.id to item.pieces.coerceAtLeast(1))
-                            else selectedQtyMap - item.id
-                        }
-                    )
-                    Text(item.displayName, color = palette.textPrimary, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
-                    if (checked) {
-                        Text("Qty:", color = palette.textMuted, fontSize = 11.sp)
-                        Spacer(Modifier.width(4.dp))
-                        IconButton(onClick = { if (qty > 1) selectedQtyMap = selectedQtyMap + (item.id to qty - 1) }, modifier = Modifier.size(28.dp)) {
-                            Text("-", color = palette.accent, fontWeight = FontWeight.Bold)
-                        }
-                        Text(qty.toString(), color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-                        IconButton(onClick = { selectedQtyMap = selectedQtyMap + (item.id to qty + 1) }, modifier = Modifier.size(28.dp)) {
-                            Text("+", color = palette.accent, fontWeight = FontWeight.Bold)
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(filtered, key = { it.id }) { item ->
+                    val checked = item.id in selectedQtyMap
+                    val qty = selectedQtyMap[item.id] ?: 1
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = { on ->
+                                selectedQtyMap = if (on) selectedQtyMap + (item.id to item.pieces.coerceAtLeast(1))
+                                else selectedQtyMap - item.id
+                            }
+                        )
+                        Text(item.displayName, color = palette.textPrimary, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+                        if (checked) {
+                            Text("Qty:", color = palette.textMuted, fontSize = 11.sp)
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(onClick = { if (qty > 1) selectedQtyMap = selectedQtyMap + (item.id to qty - 1) }, modifier = Modifier.size(28.dp)) {
+                                Text("-", color = palette.accent, fontWeight = FontWeight.Bold)
+                            }
+                            Text(qty.toString(), color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                            IconButton(onClick = { selectedQtyMap = selectedQtyMap + (item.id to qty + 1) }, modifier = Modifier.size(28.dp)) {
+                                Text("+", color = palette.accent, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
@@ -726,11 +744,15 @@ fun BarcodeLabelPrintDialog(
                         val pairs = selectedQtyMap.mapNotNull { (id, q) ->
                             allItems.find { it.id == id }?.let { it to q }
                         }
-                        val pdf = PdfAndPrintHelper.generateBarcodeLabelsPdf(
-                            context, pairs, settings, layout, showShopName, showPrice, showCategory
-                        )
-                        if (pdf != null) PdfAndPrintHelper.printPdfFile(context, pdf, "Barcode Labels")
-                        else Toast.makeText(context, "Could not generate barcode sheet.", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            val pdf = withContext(Dispatchers.IO) {
+                                PdfAndPrintHelper.generateBarcodeLabelsPdf(
+                                    context, pairs, settings, layout, showShopName, showPrice, showCategory
+                                )
+                            }
+                            if (pdf != null) PdfAndPrintHelper.printPdfFile(context, pdf, "Barcode Labels")
+                            else Toast.makeText(context, "Could not generate barcode sheet.", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     modifier = Modifier.weight(1.4f)
                 )

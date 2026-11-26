@@ -11,13 +11,23 @@ import android.os.Build
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import com.example.data.backup.AutoBackupWorker
 import com.example.data.local.KeystoreSecretStore
 import com.example.data.remote.FirebaseManager
 import com.example.data.repository.ShopRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
-class NoorApplication : Application() {
+class NoorApplication : Application(), ImageLoaderFactory {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     lateinit var secretStore: KeystoreSecretStore
         private set
     lateinit var repository: ShopRepository
@@ -29,9 +39,30 @@ class NoorApplication : Application() {
         secretStore = KeystoreSecretStore(this)
         repository = ShopRepository(this, secretStore)
 
-        createNotificationChannels()
-        monitorConnectivity()
-        scheduleAutoBackupWorker()
+        // Defer non-UI startup tasks off the critical main-thread frame
+        appScope.launch(Dispatchers.IO) {
+            secretStore.warmUpCache()
+            createNotificationChannels()
+            monitorConnectivity()
+            scheduleAutoBackupWorker()
+        }
+    }
+
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(0.20)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(50L * 1024L * 1024L)
+                    .build()
+            }
+            .crossfade(true)
+            .build()
     }
 
     private fun createNotificationChannels() {

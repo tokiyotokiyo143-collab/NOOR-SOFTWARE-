@@ -23,20 +23,17 @@ import java.io.FileOutputStream
 
 object PdfAndPrintHelper {
 
-    fun decodeDataUrlBitmap(dataUrl: String): Bitmap? {
-        if (dataUrl.isBlank()) return null
-        return try {
-            val b64 = dataUrl.substringAfter("base64,", dataUrl)
-            val bytes = Base64.decode(b64, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        } catch (_: Exception) {
-            null
-        }
-    }
+    fun decodeDataUrlBitmap(dataUrl: String): Bitmap? = BitmapCache.decodeDataUrlCached(dataUrl)
 
     private fun shopLogoBitmap(context: Context, settings: ShopSettings): Bitmap? {
-        return decodeDataUrlBitmap(settings.logoDataUrl)
-            ?: runCatching { BitmapFactory.decodeResource(context.resources, R.drawable.noor_software_logo_1795681598224) }.getOrNull()
+        decodeDataUrlBitmap(settings.logoDataUrl)?.let { return it }
+        val key = "res:default_shop_logo"
+        BitmapCache.get(key)?.let { return it }
+        return runCatching {
+            BitmapFactory.decodeResource(context.resources, R.drawable.noor_software_logo_1795681598224)?.also {
+                BitmapCache.put(key, it)
+            }
+        }.getOrNull()
     }
 
     private fun upiQrBitmap(settings: ShopSettings, amount: Double): Bitmap? {

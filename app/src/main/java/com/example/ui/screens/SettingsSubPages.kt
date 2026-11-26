@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.*
 import com.example.ui.MainViewModel
 import com.example.ui.auth.ChangePasswordDialog
@@ -45,8 +46,8 @@ import com.example.ui.components.NoorStatusDot
 import com.example.ui.theme.LocalNoorColors
 import com.example.ui.theme.noorCard
 import com.example.util.Formatters
-import com.example.util.PdfAndPrintHelper
 import com.example.util.WhatsAppHelper
+import com.example.util.rememberCachedDataUrlBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -112,9 +113,11 @@ fun ShopProfileSettingsPage(
 
     val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
-            val (dataUrl, tooBig) = encodePickedImageUnder200Kb(context, uri)
-            if (dataUrl.isNotBlank()) {
-                scope.launch {
+            scope.launch {
+                val (dataUrl, tooBig) = withContext(Dispatchers.IO) {
+                    encodePickedImageUnder200Kb(context, uri)
+                }
+                if (dataUrl.isNotBlank()) {
                     vm.repo.updateSettings { it.copy(logoDataUrl = dataUrl) }
                     onSaved()
                     if (tooBig) {
@@ -127,9 +130,11 @@ fun ShopProfileSettingsPage(
 
     val qrPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
-            val (dataUrl, tooBig) = encodePickedImageUnder200Kb(context, uri)
-            if (dataUrl.isNotBlank()) {
-                scope.launch {
+            scope.launch {
+                val (dataUrl, tooBig) = withContext(Dispatchers.IO) {
+                    encodePickedImageUnder200Kb(context, uri)
+                }
+                if (dataUrl.isNotBlank()) {
                     vm.repo.updateSettings { it.copy(upiQrDataUrl = dataUrl) }
                     onSaved()
                     if (tooBig) {
@@ -148,9 +153,9 @@ fun ShopProfileSettingsPage(
                 "Shown on the Sign-In header, app top bar, and printed customer bills. Max 200 KB for cloud sync."
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                val bmp = remember(settings.logoDataUrl) { PdfAndPrintHelper.decodeDataUrlBitmap(settings.logoDataUrl) }
+                val bmp = rememberCachedDataUrlBitmap(settings.logoDataUrl)
                 if (bmp != null) {
-                    Image(bmp.asImageBitmap(), contentDescription = "Shop Logo", modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
+                    Image(bmp, contentDescription = "Shop Logo", modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
                 }
                 OutlinedButton(onClick = {
                     logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -228,10 +233,10 @@ fun ShopProfileSettingsPage(
             )
 
             SettingExplainer("UPI QR Code Image", "Printed at the bottom of bills for instant customer payment. Max 200 KB.")
-            val qrBmp = remember(settings.upiQrDataUrl) { PdfAndPrintHelper.decodeDataUrlBitmap(settings.upiQrDataUrl) }
+            val qrBmp = rememberCachedDataUrlBitmap(settings.upiQrDataUrl)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (qrBmp != null) {
-                    Image(qrBmp.asImageBitmap(), contentDescription = "UPI QR", modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)))
+                    Image(qrBmp, contentDescription = "UPI QR", modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)))
                 } else {
                     Text("No QR", color = palette.textMuted, fontSize = 12.5.sp)
                 }
@@ -563,7 +568,7 @@ fun AiAssistantSettingsPage(
     val palette = LocalNoorColors.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val aiSettings by vm.aiSettings.collectAsState()
+    val aiSettings by vm.aiSettings.collectAsStateWithLifecycle()
 
     var apiKey by remember { mutableStateOf(vm.secretStore.getGeminiApiKey()) }
     var showKey by remember { mutableStateOf(false) }
@@ -762,9 +767,10 @@ fun AppearanceSettingsPage(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        val swatchColor = remember(preset.accentHex) { Color(android.graphics.Color.parseColor(preset.accentHex)) }
                         Box(
                             Modifier.size(20.dp).clip(CircleShape)
-                                .background(Color(android.graphics.Color.parseColor(preset.accentHex)))
+                                .background(swatchColor)
                         )
                         Text(preset.label, color = palette.textPrimary, fontWeight = FontWeight.Bold)
                     }
@@ -833,7 +839,7 @@ fun AppearanceSettingsPage(
 private fun ColorPickerRow(swatches: List<String>, selectedHex: String, onSelect: (String) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         swatches.forEach { hex ->
-            val col = Color(android.graphics.Color.parseColor(hex))
+            val col = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }
             val sel = selectedHex.equals(hex, true)
             Box(
                 modifier = Modifier
@@ -857,8 +863,8 @@ fun BackupDataSettingsPage(
     val palette = LocalNoorColors.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val syncStatus by vm.repo.syncStatus.collectAsState()
-    val autoBackups by vm.repo.autoBackups.collectAsState()
+    val syncStatus by vm.repo.syncStatus.collectAsStateWithLifecycle()
+    val autoBackups by vm.repo.autoBackups.collectAsStateWithLifecycle()
 
     var showClearConfirm by remember { mutableStateOf(false) }
     var showCustomDays by remember { mutableStateOf(false) }

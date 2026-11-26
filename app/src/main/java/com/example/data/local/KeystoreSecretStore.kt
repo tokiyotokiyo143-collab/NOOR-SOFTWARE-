@@ -41,6 +41,25 @@ class KeystoreSecretStore(context: Context) {
         private const val PREF_LAST_WEEKLY_REMINDER = "last_weekly_backup_reminder"
     }
 
+    private val lock = Any()
+
+    @Volatile private var cachedGeminiKey: String? = null
+    @Volatile private var cachedPin: String? = null
+    @Volatile private var cachedOfflineSessionLoaded = false
+    @Volatile private var cachedOfflineSession: OfflineUserSession? = null
+    @Volatile private var cachedAiSettings: AiSettings? = null
+    @Volatile private var cachedCompanies: List<CompanyMeta>? = null
+    @Volatile private var cachedActiveCompanyId: String? = null
+
+    fun warmUpCache() {
+        getCompanies()
+        getActiveCompanyId()
+        getAiSettings()
+        getDevicePin()
+        getOfflineSession()
+        getGeminiApiKey()
+    }
+
     private fun getOrCreateKey(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val existing = ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
@@ -91,127 +110,185 @@ class KeystoreSecretStore(context: Context) {
         }
     }
 
-    fun getGeminiApiKey(): String = decrypt(prefs.getString(PREF_GEMINI_KEY, "") ?: "")
-    fun setGeminiApiKey(key: String) {
-        prefs.edit().putString(PREF_GEMINI_KEY, encrypt(key.trim())).apply()
+    fun getGeminiApiKey(): String {
+        cachedGeminiKey?.let { return it }
+        return synchronized(lock) {
+            cachedGeminiKey ?: decrypt(prefs.getString(PREF_GEMINI_KEY, "") ?: "").also { cachedGeminiKey = it }
+        }
     }
 
-    fun getDevicePin(): String = decrypt(prefs.getString(PREF_PIN_CODE, "") ?: "")
+    fun setGeminiApiKey(key: String) {
+        val clean = key.trim()
+        synchronized(lock) {
+            cachedGeminiKey = clean
+            prefs.edit().putString(PREF_GEMINI_KEY, encrypt(clean)).apply()
+        }
+    }
+
+    fun getDevicePin(): String {
+        cachedPin?.let { return it }
+        return synchronized(lock) {
+            cachedPin ?: decrypt(prefs.getString(PREF_PIN_CODE, "") ?: "").also { cachedPin = it }
+        }
+    }
+
     fun setDevicePin(pin: String) {
-        prefs.edit().putString(PREF_PIN_CODE, encrypt(pin.trim())).apply()
+        val clean = pin.trim()
+        synchronized(lock) {
+            cachedPin = clean
+            prefs.edit().putString(PREF_PIN_CODE, encrypt(clean)).apply()
+        }
     }
 
     fun saveOfflineSession(session: OfflineUserSession?) {
-        if (session == null) {
-            prefs.edit().remove(PREF_OFFLINE_SESSION).apply()
-            return
+        synchronized(lock) {
+            cachedOfflineSession = session
+            cachedOfflineSessionLoaded = true
+            if (session == null) {
+                prefs.edit().remove(PREF_OFFLINE_SESSION).apply()
+                return
+            }
+            val json = JSONObject().apply {
+                put("uid", session.uid)
+                put("email", session.email)
+                put("displayName", session.displayName)
+                put("emailVerified", session.emailVerified)
+            }.toString()
+            prefs.edit().putString(PREF_OFFLINE_SESSION, encrypt(json)).apply()
         }
-        val json = JSONObject().apply {
-            put("uid", session.uid)
-            put("email", session.email)
-            put("displayName", session.displayName)
-            put("emailVerified", session.emailVerified)
-        }.toString()
-        prefs.edit().putString(PREF_OFFLINE_SESSION, encrypt(json)).apply()
     }
 
     fun getOfflineSession(): OfflineUserSession? {
-        val raw = decrypt(prefs.getString(PREF_OFFLINE_SESSION, "") ?: "")
-        if (raw.isBlank()) return null
-        return try {
-            val obj = JSONObject(raw)
-            OfflineUserSession(
-                uid = obj.optString("uid"),
-                email = obj.optString("email"),
-                displayName = obj.optString("displayName"),
-                emailVerified = obj.optBoolean("emailVerified", false)
-            ).takeIf { it.email.isNotBlank() }
-        } catch (_: Exception) {
-            null
+        if (cachedOfflineSessionLoaded) return cachedOfflineSession
+        return synchronized(lock) {
+            if (cachedOfflineSessionLoaded) return cachedOfflineSession
+            val raw = decrypt(prefs.getString(PREF_OFFLINE_SESSION, "") ?: "")
+            val parsed = if (raw.isBlank()) null else try {
+                val obj = JSONObject(raw)
+                OfflineUserSession(
+                    uid = obj.optString("uid"),
+                    email = obj.optString("email"),
+                    displayName = obj.optString("displayName"),
+                    emailVerified = obj.optBoolean("emailVerified", false)
+                ).takeIf { it.email.isNotBlank() }
+            } catch (_: Exception) {
+                null
+            }
+            cachedOfflineSession = parsed
+            cachedOfflineSessionLoaded = true
+            parsed
         }
     }
 
     fun getAiSettings(): AiSettings {
-        val raw = prefs.getString(PREF_AI_SETTINGS, null) ?: return AiSettings()
-        return try {
-            val obj = JSONObject(raw)
-            AiSettings(
-                enabled = obj.optBoolean("enabled", false),
-                model = obj.optString("model", "gemini-3.5-flash-lite").ifBlank { "gemini-3.5-flash-lite" }.let { if (it.startsWith("gemini-2")) "gemini-3.5-flash-lite" else it },
-                speakRepliesAloud = obj.optBoolean("speakRepliesAloud", true),
-                replyLanguage = obj.optString("replyLanguage", "ta").ifBlank { "ta" },
-                askConfirmationForDestructive = obj.optBoolean("askConfirmationForDestructive", true),
-                allowScreenShare = obj.optBoolean("allowScreenShare", true),
-                bubbleOffsetXFraction = obj.optDouble("bubbleOffsetXFraction", 0.92).toFloat(),
-                bubbleOffsetYFraction = obj.optDouble("bubbleOffsetYFraction", 0.72).toFloat()
-            )
-        } catch (_: Exception) {
-            AiSettings()
+        cachedAiSettings?.let { return it }
+        return synchronized(lock) {
+            cachedAiSettings?.let { return it }
+            val raw = prefs.getString(PREF_AI_SETTINGS, null)
+            val parsed = if (raw == null) AiSettings() else try {
+                val obj = JSONObject(raw)
+                AiSettings(
+                    enabled = obj.optBoolean("enabled", false),
+                    model = obj.optString("model", "gemini-3.5-flash-lite").ifBlank { "gemini-3.5-flash-lite" }.let { if (it.startsWith("gemini-2")) "gemini-3.5-flash-lite" else it },
+                    speakRepliesAloud = obj.optBoolean("speakRepliesAloud", true),
+                    replyLanguage = obj.optString("replyLanguage", "ta").ifBlank { "ta" },
+                    askConfirmationForDestructive = obj.optBoolean("askConfirmationForDestructive", true),
+                    allowScreenShare = obj.optBoolean("allowScreenShare", true),
+                    bubbleOffsetXFraction = obj.optDouble("bubbleOffsetXFraction", 0.92).toFloat(),
+                    bubbleOffsetYFraction = obj.optDouble("bubbleOffsetYFraction", 0.72).toFloat()
+                )
+            } catch (_: Exception) {
+                AiSettings()
+            }
+            cachedAiSettings = parsed
+            parsed
         }
     }
 
     fun saveAiSettings(settings: AiSettings) {
-        val json = JSONObject().apply {
-            put("enabled", settings.enabled)
-            put("model", settings.model)
-            put("speakRepliesAloud", settings.speakRepliesAloud)
-            put("replyLanguage", settings.replyLanguage)
-            put("askConfirmationForDestructive", settings.askConfirmationForDestructive)
-            put("allowScreenShare", settings.allowScreenShare)
-            put("bubbleOffsetXFraction", settings.bubbleOffsetXFraction.toDouble())
-            put("bubbleOffsetYFraction", settings.bubbleOffsetYFraction.toDouble())
-        }.toString()
-        prefs.edit().putString(PREF_AI_SETTINGS, json).apply()
+        synchronized(lock) {
+            cachedAiSettings = settings
+            val json = JSONObject().apply {
+                put("enabled", settings.enabled)
+                put("model", settings.model)
+                put("speakRepliesAloud", settings.speakRepliesAloud)
+                put("replyLanguage", settings.replyLanguage)
+                put("askConfirmationForDestructive", settings.askConfirmationForDestructive)
+                put("allowScreenShare", settings.allowScreenShare)
+                put("bubbleOffsetXFraction", settings.bubbleOffsetXFraction.toDouble())
+                put("bubbleOffsetYFraction", settings.bubbleOffsetYFraction.toDouble())
+            }.toString()
+            prefs.edit().putString(PREF_AI_SETTINGS, json).apply()
+        }
     }
 
     fun getCompanies(): List<CompanyMeta> {
-        val raw = prefs.getString(PREF_COMPANIES, null)
-        if (raw.isNullOrBlank()) {
-            val defaultCompany = CompanyMeta(
-                id = "default",
-                name = "AN-NOOR Mobile Service Point",
-                dbName = "noor_shop_default.db"
-            )
-            saveCompanies(listOf(defaultCompany))
-            return listOf(defaultCompany)
-        }
-        return try {
-            val arr = JSONArray(raw)
-            val list = (0 until arr.length()).mapNotNull { i ->
-                arr.optJSONObject(i)?.let {
-                    CompanyMeta(
-                        id = it.optString("id", "default"),
-                        name = it.optString("name", "AN-NOOR Mobile Service Point"),
-                        dbName = it.optString("dbName", "noor_shop_default.db"),
-                        createdAt = it.optLong("createdAt", System.currentTimeMillis())
-                    )
+        cachedCompanies?.let { return it }
+        return synchronized(lock) {
+            cachedCompanies?.let { return it }
+            val raw = prefs.getString(PREF_COMPANIES, null)
+            val list = if (raw.isNullOrBlank()) {
+                val defaultCompany = CompanyMeta(
+                    id = "default",
+                    name = "AN-NOOR Mobile Service Point",
+                    dbName = "noor_shop_default.db"
+                )
+                saveCompanies(listOf(defaultCompany))
+                listOf(defaultCompany)
+            } else try {
+                val arr = JSONArray(raw)
+                val parsed = (0 until arr.length()).mapNotNull { i ->
+                    arr.optJSONObject(i)?.let {
+                        CompanyMeta(
+                            id = it.optString("id", "default"),
+                            name = it.optString("name", "AN-NOOR Mobile Service Point"),
+                            dbName = it.optString("dbName", "noor_shop_default.db"),
+                            createdAt = it.optLong("createdAt", System.currentTimeMillis())
+                        )
+                    }
                 }
-            }
-            list.ifEmpty {
+                parsed.ifEmpty {
+                    listOf(CompanyMeta("default", "AN-NOOR Mobile Service Point", "noor_shop_default.db"))
+                }
+            } catch (_: Exception) {
                 listOf(CompanyMeta("default", "AN-NOOR Mobile Service Point", "noor_shop_default.db"))
             }
-        } catch (_: Exception) {
-            listOf(CompanyMeta("default", "AN-NOOR Mobile Service Point", "noor_shop_default.db"))
+            cachedCompanies = list
+            list
         }
     }
 
     fun saveCompanies(companies: List<CompanyMeta>) {
-        val arr = JSONArray().apply {
-            companies.forEach { c ->
-                put(JSONObject().apply {
-                    put("id", c.id)
-                    put("name", c.name)
-                    put("dbName", c.dbName)
-                    put("createdAt", c.createdAt)
-                })
+        synchronized(lock) {
+            cachedCompanies = companies
+            val arr = JSONArray().apply {
+                companies.forEach { c ->
+                    put(JSONObject().apply {
+                        put("id", c.id)
+                        put("name", c.name)
+                        put("dbName", c.dbName)
+                        put("createdAt", c.createdAt)
+                    })
+                }
             }
+            prefs.edit().putString(PREF_COMPANIES, arr.toString()).apply()
         }
-        prefs.edit().putString(PREF_COMPANIES, arr.toString()).apply()
     }
 
-    fun getActiveCompanyId(): String = prefs.getString(PREF_ACTIVE_COMPANY, "default") ?: "default"
+    fun getActiveCompanyId(): String {
+        cachedActiveCompanyId?.let { return it }
+        return synchronized(lock) {
+            cachedActiveCompanyId ?: (prefs.getString(PREF_ACTIVE_COMPANY, "default") ?: "default").also {
+                cachedActiveCompanyId = it
+            }
+        }
+    }
+
     fun setActiveCompanyId(id: String) {
-        prefs.edit().putString(PREF_ACTIVE_COMPANY, id).apply()
+        synchronized(lock) {
+            cachedActiveCompanyId = id
+            prefs.edit().putString(PREF_ACTIVE_COMPANY, id).apply()
+        }
     }
 
     fun isFirstLaunchPromptShown(): Boolean = prefs.getBoolean(PREF_FIRST_LAUNCH_PROMPT_SHOWN, false)

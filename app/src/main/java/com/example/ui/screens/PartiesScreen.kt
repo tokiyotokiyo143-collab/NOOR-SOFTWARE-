@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -24,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.*
 import com.example.ui.MainViewModel
 import com.example.ui.components.*
@@ -57,10 +60,9 @@ fun PartiesScreen(
     var deleteTarget by remember { mutableStateOf<Party?>(null) }
     var showQuickTemplates by remember { mutableStateOf(false) }
 
-    val filters = listOf("All Parties", "Customers", "Suppliers", "Pending Dues")
-    val summaries = remember(parties, invoices, purchases, repairs, payments) {
-        parties.map { vm.repo.computePartySummary(it) }
-    }
+    val analytics by vm.repo.analytics.collectAsStateWithLifecycle()
+    val filters = remember { listOf("All Parties", "Customers", "Suppliers", "Pending Dues") }
+    val summaries = analytics.partySummaries
 
     val filtered = remember(summaries, filterChip, searchQuery) {
         val q = searchQuery.trim().lowercase()
@@ -77,71 +79,77 @@ fun PartiesScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        NoorSectionTitle(
-            title = "Parties (Customers & Suppliers)",
-            trailing = {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = { showQuickTemplates = true }) {
-                        Text("Quick Message", fontSize = 11.5.sp, color = palette.accent, fontWeight = FontWeight.Bold)
-                    }
-                    Button(
-                        onClick = { editingParty = null; showPartyForm = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                        modifier = Modifier.testTag("add_party_button")
-                    ) {
-                        Text("+ Party", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        item(key = "header") {
+            NoorSectionTitle(
+                title = "Parties (Customers & Suppliers)",
+                trailing = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(onClick = { showQuickTemplates = true }) {
+                            Text("Quick Message", fontSize = 11.5.sp, color = palette.accent, fontWeight = FontWeight.Bold)
+                        }
+                        Button(
+                            onClick = { editingParty = null; showPartyForm = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                            modifier = Modifier.testTag("add_party_button")
+                        ) {
+                            Text("+ Party", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
 
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Search customer or supplier by name or phone...") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp)
-        )
+        item(key = "search_filters") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search customer or supplier by name or phone...") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp)
+                )
 
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            filters.forEach { f ->
-                val sel = filterChip == f
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (sel) palette.accent else palette.inputBg)
-                        .border(1.dp, if (sel) palette.accent else palette.border, RoundedCornerShape(12.dp))
-                        .clickable { filterChip = f }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(f, color = if (sel) Color.White else palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    filters.forEach { f ->
+                        val sel = filterChip == f
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (sel) palette.accent else palette.inputBg)
+                                .border(1.dp, if (sel) palette.accent else palette.border, RoundedCornerShape(12.dp))
+                                .clickable { filterChip = f }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(f, color = if (sel) Color.White else palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
+
+                Text("Tip: Swipe left on a party card to quick-edit details", color = palette.textMuted, fontSize = 11.5.sp)
             }
         }
 
-        Text("Tip: Swipe left on a party card to quick-edit details", color = palette.textMuted, fontSize = 11.5.sp)
-
         if (filtered.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxWidth().noorCard(palette).padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No matching parties found.", color = palette.textSecondary, fontSize = 13.5.sp)
+            item(key = "empty") {
+                Box(
+                    modifier = Modifier.fillMaxWidth().noorCard(palette).padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No matching parties found.", color = palette.textSecondary, fontSize = 13.5.sp)
+                }
             }
         } else {
-            filtered.forEach { s ->
+            items(filtered, key = { it.party.id }) { s ->
                 val p = s.party
                 SwipeActionCard(
                     onEdit = { editingParty = p; showPartyForm = true },
@@ -195,7 +203,6 @@ fun PartiesScreen(
                 }
             }
         }
-        Spacer(Modifier.height(96.dp))
     }
 
     if (showPartyForm) {
@@ -210,7 +217,7 @@ fun PartiesScreen(
     }
 
     selectedPartyDetail?.let { party ->
-        val summary = vm.repo.computePartySummary(party)
+        val summary = analytics.partySummaryById[party.id] ?: vm.repo.computePartySummary(party)
         PartyDetailDialog(
             party = party,
             summary = summary,

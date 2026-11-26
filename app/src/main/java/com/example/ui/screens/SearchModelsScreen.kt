@@ -3,8 +3,9 @@ package com.example.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.Search
@@ -15,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Invoice
 import com.example.data.model.NavSection
 import com.example.data.model.ShopSettings
@@ -35,81 +37,84 @@ fun SearchModelsScreen(
     isOwner: Boolean
 ) {
     val palette = LocalNoorColors.current
+    val analytics by vm.repo.analytics.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
 
     val filtered = remember(items, query, selectedCategory) {
+        val tokens = Formatters.tokenizeQuery(query)
         items.filter { item ->
             (selectedCategory == null || item.category.equals(selectedCategory, true)) &&
-                Formatters.matchesStockQuery(item, query)
+                Formatters.matchesStockQueryTokens(item, tokens)
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(14.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        NoorSectionTitle(
-            title = "Quick Model & Stock Search",
-            subtitle = "Tap a category chip or type any phone model (like “Y20” or “Note 12”) to inspect stock, compatible models & sold history."
-        )
+        item(key = "header") {
+            NoorSectionTitle(
+                title = "Quick Model & Stock Search",
+                subtitle = "Tap a category chip or type any phone model (like “Y20” or “Note 12”) to inspect stock, compatible models & sold history."
+            )
+        }
 
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search model (e.g. Y20), brand, color, or also-fits...") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
-            trailingIcon = {
-                if (query.isNotBlank()) {
-                    IconButton(onClick = { query = "" }) {
-                        Icon(Icons.Outlined.Clear, contentDescription = "Clear")
+        item(key = "search_bar") {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search model (e.g. Y20), brand, color, or also-fits...") },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Outlined.Clear, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        item(key = "category_chips") {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Quick Category Filters", color = palette.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    TextButton(onClick = { query = ""; selectedCategory = null }) {
+                        Text("Clear all filters", color = palette.accent, fontSize = 12.sp)
                     }
                 }
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Quick Category Filters", color = palette.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                TextButton(onClick = { query = ""; selectedCategory = null }) {
-                    Text("Clear all filters", color = palette.accent, fontSize = 12.sp)
-                }
-            }
-            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                settings.customCategories.forEach { cat ->
-                    FilterChip(
-                        selected = selectedCategory == cat,
-                        onClick = { selectedCategory = if (selectedCategory == cat) null else cat },
-                        label = { Text(cat, fontSize = 12.sp) }
-                    )
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    settings.customCategories.forEach { cat ->
+                        FilterChip(
+                            selected = selectedCategory == cat,
+                            onClick = { selectedCategory = if (selectedCategory == cat) null else cat },
+                            label = { Text(cat, fontSize = 12.sp) }
+                        )
+                    }
                 }
             }
         }
 
         if (filtered.isEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().noorCard(palette).padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("No items match your search & filter.", color = palette.textSecondary)
-                TextButton(onClick = { query = ""; selectedCategory = null }) {
-                    Text("Reset Filters", color = palette.accent, fontWeight = FontWeight.Bold)
+            item(key = "empty") {
+                Column(
+                    modifier = Modifier.fillMaxWidth().noorCard(palette).padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("No items match your search & filter.", color = palette.textSecondary)
+                    TextButton(onClick = { query = ""; selectedCategory = null }) {
+                        Text("Reset Filters", color = palette.accent, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         } else {
-            filtered.forEach { item ->
-                val soldLines = remember(invoices, item.id) {
-                    invoices.filter { it.status == "active" && it.docType == "invoice" }
-                        .flatMap { inv ->
-                            inv.items.filter { it.itemId == item.id }.map { line -> inv to line }
-                        }
-                }
+            items(filtered, key = { it.id }) { item ->
+                val soldStat = analytics.soldStatsByItemId[item.id]
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -141,13 +146,11 @@ fun SearchModelsScreen(
                             Text("Buy: ${Formatters.formatInr(item.costPrice)}", color = palette.textMuted, fontSize = 12.5.sp)
                         }
                     }
-                    if (soldLines.isEmpty()) {
+                    if (soldStat == null) {
                         Text("No sales recorded for this item yet.", color = palette.textMuted, fontSize = 11.5.sp)
                     } else {
-                        val totalQty = soldLines.sumOf { it.second.qty }
-                        val lastSale = soldLines.first().first
                         Text(
-                            "Sold $totalQty ${item.unit} · Last: ${lastSale.invoiceNumber} (${Formatters.formatDisplayDate(lastSale.date)})",
+                            "Sold ${soldStat.soldQty} ${item.unit} · Last: ${soldStat.lastInvoiceNumber} (${Formatters.formatDisplayDate(soldStat.lastSaleDate)})",
                             color = palette.statusGreen,
                             fontSize = 11.5.sp
                         )
@@ -155,6 +158,5 @@ fun SearchModelsScreen(
                 }
             }
         }
-        Spacer(Modifier.height(96.dp))
     }
 }

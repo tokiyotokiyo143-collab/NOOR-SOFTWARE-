@@ -5,9 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.CompanyMeta
 import com.example.data.model.ShopSettings
 import com.example.data.model.ShopUser
@@ -100,8 +101,8 @@ fun SettingsScreen(
 ) {
     val palette = LocalNoorColors.current
     val scope = rememberCoroutineScope()
-    val debugLogs by vm.repo.debugLogs.collectAsState()
-    val syncStatus by vm.repo.syncStatus.collectAsState()
+    val debugLogs by vm.repo.debugLogs.collectAsStateWithLifecycle()
+    val syncStatus by vm.repo.syncStatus.collectAsStateWithLifecycle()
 
     var activeSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var searchQuery by remember { mutableStateOf("") }
@@ -119,45 +120,47 @@ fun SettingsScreen(
         BackHandler { activeSubPage = null }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+    val q = remember(searchQuery) { searchQuery.trim().lowercase() }
+    val visibleGroups = remember(q) {
+        SettingsSubPage.entries.filter { page ->
+            q.isEmpty() ||
+                page.title.lowercase().contains(q) ||
+                page.subtitle.lowercase().contains(q) ||
+                page.keywords.contains(q)
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (activeSubPage == null) {
-            NoorSectionTitle(
-                title = "Settings & Safety",
-                subtitle = "Cloud sync, staff email accounts & permissions, shop profile & UPI QR, AMOLED theme, and permanent backup.",
-                trailing = {
-                    if (savedBadgeVisible) {
-                        Text("Saved", color = palette.statusGreen, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+            item(key = "settings_header") {
+                NoorSectionTitle(
+                    title = "Settings & Safety",
+                    subtitle = "Cloud sync, staff email accounts & permissions, shop profile & UPI QR, AMOLED theme, and permanent backup.",
+                    trailing = {
+                        if (savedBadgeVisible) {
+                            Text("Saved", color = palette.statusGreen, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                        }
                     }
-                }
-            )
-
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Search settings") },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("settings_search_input"),
-                shape = RoundedCornerShape(14.dp)
-            )
-
-            val q = searchQuery.trim().lowercase()
-            val visibleGroups = remember(q) {
-                SettingsSubPage.entries.filter { page ->
-                    q.isEmpty() ||
-                        page.title.lowercase().contains(q) ||
-                        page.subtitle.lowercase().contains(q) ||
-                        page.keywords.contains(q)
-                }
+                )
             }
 
-            visibleGroups.forEach { page ->
+            item(key = "settings_search") {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search settings") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = palette.accent) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("settings_search_input"),
+                    shape = RoundedCornerShape(14.dp)
+                )
+            }
+
+            items(visibleGroups, key = { it.name }) { page ->
                 val needsOwnerBadge = !isOwner && (page == SettingsSubPage.BACKUP_DATA || page == SettingsSubPage.COMPANY)
                 Row(
                     modifier = Modifier
@@ -193,76 +196,79 @@ fun SettingsScreen(
             }
         } else {
             // Sub-page Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    IconButton(onClick = { activeSubPage = null }) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+            item(key = "subpage_header") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        IconButton(onClick = { activeSubPage = null }) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        }
+                        Column {
+                            Text(activeSubPage!!.title, color = palette.textPrimary, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                            Text(activeSubPage!!.subtitle, color = palette.textSecondary, fontSize = 11.5.sp)
+                        }
                     }
-                    Column {
-                        Text(activeSubPage!!.title, color = palette.textPrimary, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                        Text(activeSubPage!!.subtitle, color = palette.textSecondary, fontSize = 11.5.sp)
+                    if (savedBadgeVisible) {
+                        Text("Saved", color = palette.statusGreen, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                     }
-                }
-                if (savedBadgeVisible) {
-                    Text("Saved", color = palette.statusGreen, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                 }
             }
 
-            when (activeSubPage!!) {
-                SettingsSubPage.SHOP_PROFILE -> ShopProfileSettingsPage(vm, settings, onSaved = ::markSaved)
-                SettingsSubPage.BILLING_DEFAULTS -> BillingDefaultsSettingsPage(vm, settings, onSaved = ::markSaved)
-                SettingsSubPage.LANGUAGE_SECURITY_USERS -> LanguageSecurityUsersPage(vm, settings, currentUser, isOwner, onSaved = ::markSaved)
-                SettingsSubPage.AI_ASSISTANT -> AiAssistantSettingsPage(vm, onSaved = ::markSaved)
-                SettingsSubPage.APPEARANCE -> AppearanceSettingsPage(vm, settings, detectedScreenMode, onSaved = ::markSaved)
-                SettingsSubPage.COMPANY -> {
-                    Column(Modifier.fillMaxWidth().noorCard(palette).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("COMPANY", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 11.5.sp, letterSpacing = 1.sp)
-                        SettingExplainer(
-                            "Active Company: ${activeCompany.name}",
-                            "Current: ${activeCompany.name}. Each company keeps separate stock, sales, services and settings."
-                        )
-                        Button(
-                            onClick = { vm.setShowCompaniesSheet(true) },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                        ) {
-                            Text("Manage companies", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.Bold)
+            item(key = "subpage_${activeSubPage!!.name}") {
+                when (activeSubPage!!) {
+                    SettingsSubPage.SHOP_PROFILE -> ShopProfileSettingsPage(vm, settings, onSaved = ::markSaved)
+                    SettingsSubPage.BILLING_DEFAULTS -> BillingDefaultsSettingsPage(vm, settings, onSaved = ::markSaved)
+                    SettingsSubPage.LANGUAGE_SECURITY_USERS -> LanguageSecurityUsersPage(vm, settings, currentUser, isOwner, onSaved = ::markSaved)
+                    SettingsSubPage.AI_ASSISTANT -> AiAssistantSettingsPage(vm, onSaved = ::markSaved)
+                    SettingsSubPage.APPEARANCE -> AppearanceSettingsPage(vm, settings, detectedScreenMode, onSaved = ::markSaved)
+                    SettingsSubPage.COMPANY -> {
+                        Column(Modifier.fillMaxWidth().noorCard(palette).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("COMPANY", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 11.5.sp, letterSpacing = 1.sp)
+                            SettingExplainer(
+                                "Active Company: ${activeCompany.name}",
+                                "Current: ${activeCompany.name}. Each company keeps separate stock, sales, services and settings."
+                            )
+                            Button(
+                                onClick = { vm.setShowCompaniesSheet(true) },
+                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
+                            ) {
+                                Text("Manage companies", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.Bold)
+                            }
+                            Text("Tip: download a backup (Settings) before deleting a company. Deleting is permanent.", color = palette.statusAmber, fontSize = 12.sp)
                         }
-                        Text("Tip: download a backup (Settings) before deleting a company. Deleting is permanent.", color = palette.statusAmber, fontSize = 12.sp)
                     }
-                }
-                SettingsSubPage.BACKUP_DATA -> BackupDataSettingsPage(vm, settings, isOwner, onSaved = ::markSaved)
-                SettingsSubPage.DEBUG_ABOUT -> {
-                    Column(Modifier.fillMaxWidth().noorCard(palette).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SettingExplainer(
-                            "Storage & Cloud Status",
-                            "Checked permanent device storage status. Local Room database and Firebase Cloud Firestore offline cache are active."
-                        )
-                        Text("App Name: Noor Software (v10.0 Native Android)", color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text("Cloud Status: ${if (syncStatus.isOnline) "Online" else "Offline"} · Pending writes sync automatically", color = palette.textSecondary, fontSize = 12.5.sp)
-                        if (!syncStatus.cloudError.isNullOrBlank()) {
-                            Text("Cloud Sync Error: ${syncStatus.cloudError}", color = palette.statusRed, fontSize = 12.sp)
-                        }
-                        HorizontalDivider(color = palette.border)
-                        Text("Error Log (${debugLogs.size})", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
-                        if (debugLogs.isEmpty()) {
-                            Text("No errors logged. Everything is running cleanly.", color = palette.statusGreen, fontSize = 12.5.sp)
-                        } else {
-                            debugLogs.take(25).forEach { log ->
-                                Text(
-                                    "[${log.level}] ${Formatters.formatTime(log.timestamp)} (${log.source}): ${log.message}",
-                                    color = if (log.level == "ERROR") palette.statusRed else palette.textSecondary,
-                                    fontSize = 11.5.sp
-                                )
+                    SettingsSubPage.BACKUP_DATA -> BackupDataSettingsPage(vm, settings, isOwner, onSaved = ::markSaved)
+                    SettingsSubPage.DEBUG_ABOUT -> {
+                        Column(Modifier.fillMaxWidth().noorCard(palette).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SettingExplainer(
+                                "Storage & Cloud Status",
+                                "Checked permanent device storage status. Local Room database and Firebase Cloud Firestore offline cache are active."
+                            )
+                            Text("App Name: Noor Software (v10.0 Native Android)", color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text("Cloud Status: ${if (syncStatus.isOnline) "Online" else "Offline"} · Pending writes sync automatically", color = palette.textSecondary, fontSize = 12.5.sp)
+                            if (!syncStatus.cloudError.isNullOrBlank()) {
+                                Text("Cloud Sync Error: ${syncStatus.cloudError}", color = palette.statusRed, fontSize = 12.sp)
+                            }
+                            HorizontalDivider(color = palette.border)
+                            Text("Error Log (${debugLogs.size})", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                            if (debugLogs.isEmpty()) {
+                                Text("No errors logged. Everything is running cleanly.", color = palette.statusGreen, fontSize = 12.5.sp)
+                            } else {
+                                debugLogs.take(25).forEach { log ->
+                                    Text(
+                                        "[${log.level}] ${Formatters.formatTime(log.timestamp)} (${log.source}): ${log.message}",
+                                        color = if (log.level == "ERROR") palette.statusRed else palette.textSecondary,
+                                        fontSize = 11.5.sp
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        Spacer(Modifier.height(96.dp))
     }
 }

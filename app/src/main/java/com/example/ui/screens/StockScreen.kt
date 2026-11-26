@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Invoice
 import com.example.data.model.ShopSettings
 import com.example.data.model.StockItem
@@ -57,17 +58,27 @@ fun StockScreen(
     var deleteConfirmTarget by remember { mutableStateOf<StockItem?>(null) }
     var showScanner by remember { mutableStateOf(false) }
 
-    val soldItemIds = remember(invoices) {
-        invoices.filter { it.status == "active" && it.docType == "invoice" }
-            .flatMap { it.items.mapNotNull { l -> l.itemId } }
-            .toSet()
-    }
+    val analytics by vm.repo.analytics.collectAsStateWithLifecycle()
+    val soldItemIds = analytics.soldItemIds
 
-    val brands = remember(items) {
-        items.map { it.brand.trim() }.filter { it.isNotEmpty() }.distinct().sorted()
+    val brandData = remember(items) {
+        val counts = HashMap<String, Int>(32)
+        val displayNames = HashMap<String, String>(32)
+        for (item in items) {
+            val trimmed = item.brand.trim()
+            if (trimmed.isNotEmpty()) {
+                val key = trimmed.lowercase()
+                displayNames.putIfAbsent(key, trimmed)
+                counts[key] = (counts[key] ?: 0) + item.pieces
+            }
+        }
+        displayNames.entries
+            .sortedBy { it.value.lowercase() }
+            .map { (key, label) -> label to (counts[key] ?: 0) }
     }
 
     val filtered = remember(items, searchQuery, selectedBrand, statusFilter, selectedCategory, soldItemIds) {
+        val tokens = Formatters.tokenizeQuery(searchQuery)
         items.filter { item ->
             val brandOk = selectedBrand == null || item.brand.equals(selectedBrand, true)
             val catOk = selectedCategory == null || item.category.equals(selectedCategory, true)
@@ -78,7 +89,7 @@ fun StockScreen(
                 "Sold Items" -> item.id in soldItemIds
                 else -> true
             }
-            brandOk && catOk && statusOk && Formatters.matchesStockQuery(item, searchQuery)
+            brandOk && catOk && statusOk && Formatters.matchesStockQueryTokens(item, tokens)
         }
     }
 
@@ -148,7 +159,7 @@ fun StockScreen(
         }
 
         // Brand-Wise Stock Boxes
-        if (brands.isNotEmpty()) {
+        if (brandData.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -164,8 +175,7 @@ fun StockScreen(
                         }
                     }
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        brands.forEach { b ->
-                            val count = items.filter { it.brand.equals(b, true) }.sumOf { it.pieces }
+                        brandData.forEach { (b, count) ->
                             val selected = selectedBrand == b
                             Column(
                                 modifier = Modifier
@@ -304,7 +314,7 @@ fun StockScreen(
             settings = settings,
             isOwner = isOwner,
             findDuplicate = vm.repo::findDuplicateItem,
-            onSaveItems = { list -> scope.launch { list.forEach { vm.repo.saveItem(it, isOwner) } } },
+            onSaveItems = { list -> scope.launch { vm.repo.saveItemsBatch(list, isOwner) } },
             onDismiss = { showBulkDialog = false }
         )
     }
