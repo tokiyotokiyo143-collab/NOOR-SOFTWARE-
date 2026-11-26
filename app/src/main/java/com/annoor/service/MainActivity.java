@@ -110,11 +110,16 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri u = request.getUrl();
                 if (HOST.equals(u.getHost())) return false;
-                try {
-                    startActivity(new Intent(Intent.ACTION_VIEW, u));
-                } catch (ActivityNotFoundException ignored) {
-                }
+                launchExternal(u);
                 return true;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request,
+                                        android.webkit.WebResourceError error) {
+                if (request.isForMainFrame() && isExternal(request.getUrl())) {
+                    launchExternal(request.getUrl());
+                }
             }
 
             @Override
@@ -140,7 +145,26 @@ public class MainActivity extends Activity {
                 final android.app.Dialog d = new android.app.Dialog(MainActivity.this,
                         android.R.style.Theme_DeviceDefault_NoActionBar);
                 d.setContentView(pop);
-                pop.setWebViewClient(new WebViewClient());
+                pop.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                        if (isExternal(request.getUrl())) {
+                            launchExternal(request.getUrl());
+                            d.dismiss();
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public void onReceivedError(WebView view, WebResourceRequest request,
+                                                android.webkit.WebResourceError error) {
+                        if (request.isForMainFrame() && isExternal(request.getUrl())) {
+                            launchExternal(request.getUrl());
+                            d.dismiss();
+                        }
+                    }
+                });
                 pop.setWebChromeClient(new WebChromeClient() {
                     @Override
                     public void onCloseWindow(WebView w) {
@@ -195,6 +219,42 @@ public class MainActivity extends Activity {
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState);
         else web.loadUrl(START_URL);
+    }
+
+    private static boolean isExternal(Uri u) {
+        String sc = u.getScheme() == null ? "" : u.getScheme().toLowerCase();
+        if (!sc.equals("http") && !sc.equals("https")) return !sc.equals("about") && !sc.equals("data") && !sc.equals("blob") && !sc.equals("javascript") && !sc.isEmpty();
+        String h = u.getHost() == null ? "" : u.getHost().toLowerCase();
+        String p = u.getPath() == null ? "" : u.getPath();
+        return h.equals("wa.me") || h.endsWith("whatsapp.com") || h.equals("maps.app.goo.gl")
+                || h.equals("maps.google.com") || ((h.startsWith("www.google.") || h.startsWith("google.")) && p.startsWith("/maps"));
+    }
+
+    private void launchExternal(Uri u) {
+        try {
+            Intent i;
+            if ("intent".equalsIgnoreCase(u.getScheme())) {
+                i = Intent.parseUri(u.toString(), Intent.URI_INTENT_SCHEME);
+                i.addCategory(Intent.CATEGORY_BROWSABLE);
+                i.setComponent(null);
+                i.setSelector(null);
+            } else {
+                i = new Intent(Intent.ACTION_VIEW, u);
+            }
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            if ("whatsapp".equalsIgnoreCase(u.getScheme())) {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW,
+                            Uri.parse("https://api.whatsapp.com/send?" + u.getEncodedQuery()))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    return;
+                } catch (Exception ignored) {
+                }
+            }
+            Toast.makeText(this, "No app found to open this link", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void saveBytes(String name, String mime, byte[] bytes) {
