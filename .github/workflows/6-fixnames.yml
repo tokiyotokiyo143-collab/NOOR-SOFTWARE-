@@ -1,0 +1,20 @@
+name: fixnames
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -e
+          git config user.name noor-bot
+          git config user.email noor-bot@users.noreply.github.com
+          git mv -f app/src/main/1-AndroidManifest.xml app/src/main/AndroidManifest.xml
+          git mv -f app/2-build.gradle.kts app/build.gradle.kts
+          git mv -f docs/4-firestore.rules docs/firestore.rules
+          git mv -f docs/5-FIRESTORE-RULES-HOW-TO.txt docs/FIRESTORE-RULES-HOW-TO.txt
+          git commit -m 'Fix uploaded file names'
+          git push
