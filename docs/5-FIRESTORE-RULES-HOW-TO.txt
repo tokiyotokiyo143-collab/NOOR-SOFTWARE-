@@ -1,0 +1,8 @@
+How to publish (owner does this, 2 minutes, safe to do after testing):
+1. console.firebase.google.com > project hale-thought-sk4jk > Firestore Database > Rules.
+2. Copy the old rules somewhere first (backup).
+3. Paste firestore.rules, press Publish.
+4. Open the app as owner: the "Cloud sync blocked" banner should go. Log in as a staff user: bills/stock work, but cost price and profit must stay hidden, and delete must fail.
+5. If anything breaks, paste the old rules back.
+Not tested yet against the live project (no access). Staff per-feature permissions (only billing, etc.) are enforced by the app screen only, not by these rules.
+Note: this keeps ONE shop per Firebase project.
