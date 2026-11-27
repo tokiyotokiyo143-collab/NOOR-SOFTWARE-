@@ -16,6 +16,7 @@ jobs:
 
       - name: Restore last working index.html
         run: |
+          mkdir -p app/src/main/assets
           git show 8f673aa:app/src/main/assets/index.html > app/src/main/assets/index.html
           ls -l app/src/main/assets/index.html
 
