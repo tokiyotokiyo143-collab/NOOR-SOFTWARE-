@@ -9,8 +9,8 @@ android {
   defaultConfig {
     applicationId = "com.annoor.service"
     minSdk = 26
-    targetSdk = 35
-    versionCode = 1
+    targetSdk = (project.findProperty("targetSdkOverride") as String?)?.toInt() ?: 35
+    versionCode = (project.findProperty("appVersionCode") as String?)?.toInt() ?: 1
     versionName = "1.0"
   }
 
@@ -23,7 +23,22 @@ android {
     }
   }
 
+  signingConfigs {
+    if (System.getenv("RELEASE_KEYSTORE_PATH") != null) {
+      create("releaseConfig") {
+        storeFile = file(System.getenv("RELEASE_KEYSTORE_PATH"))
+        storePassword = System.getenv("RELEASE_STORE_PASSWORD")
+        keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+        keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+      }
+    }
+  }
+
   buildTypes {
+    release {
+      isMinifyEnabled = false
+      signingConfigs.findByName("releaseConfig")?.let { signingConfig = it }
+    }
     debug {
       signingConfig = signingConfigs.getByName("debugConfig")
     }
