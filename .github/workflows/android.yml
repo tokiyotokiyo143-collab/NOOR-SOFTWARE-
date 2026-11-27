@@ -11,13 +11,13 @@ jobs:
     steps:
       - name: Get code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Use staged index.html
+      - name: Restore last working index.html
         run: |
-          cd app/src/main/assets
-          f=$(ls -1 [0-9]*-index.html 2>/dev/null | sort -V | tail -1 || true)
-          if [ -n "$f" ]; then cp -f "$f" index.html; rm -f [0-9]*-index.html; fi
-          ls -l index.html
+          git show 8f673aa:app/src/main/assets/index.html > app/src/main/assets/index.html
+          ls -l app/src/main/assets/index.html
 
       - name: Install Java 17
         uses: actions/setup-java@v4
