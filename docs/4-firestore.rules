@@ -1,0 +1,46 @@
+rules_version = '2';
+// Noor Software - strict Firestore rules (DRAFT: test in the Rules Playground / emulator before publishing)
+// Owner: tokiyotokiyo143@gmail.com. Staff: listed in shopConfig/main.allowedEmails / allowedUids.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function email() { return request.auth.token.email.lower(); }
+    function isOwner() { return signedIn() && email() == 'tokiyotokiyo143@gmail.com'; }
+
+    function shop() { return get(/databases/$(database)/documents/shopConfig/main).data; }
+    function shopExists() { return exists(/databases/$(database)/documents/shopConfig/main); }
+    function isStaff() {
+      return signedIn() && shopExists() &&
+        (email() in shop().allowedEmails || request.auth.uid in shop().get('allowedUids', []));
+    }
+    function isMember() { return isOwner() || isStaff(); }
+
+    // Owner-only: cost prices and profit data. Staff never read this.
+    match /ownerCosts/{doc} {
+      allow read, write: if isOwner();
+    }
+
+    // Shop settings: members read, only owner writes. Owner can create it the first time.
+    match /shopConfig/{doc} {
+      allow read: if isMember();
+      allow write: if isOwner();
+    }
+
+    // Staff accounts: owner manages; a staff user can read only their own record.
+    match /users/{uid} {
+      allow read: if isOwner() ||
+        (signedIn() && (resource.data.authUid == request.auth.uid || resource.data.email.lower() == email()));
+      allow write: if isOwner();
+    }
+
+    // Business data: members read and write. Staff cannot delete (owner only).
+    match /{col}/{doc} {
+      allow read: if isMember() && col in ['items','invoices','parties','payments','purchases','receipts','repairs','expenses','bankAccounts','cashBankTxns','recharts'];
+      allow create, update: if isMember() && col in ['items','invoices','parties','payments','purchases','receipts','repairs','expenses','bankAccounts','cashBankTxns','recharts'];
+      allow delete: if isOwner() && col in ['items','invoices','parties','payments','purchases','receipts','repairs','expenses','bankAccounts','cashBankTxns','recharts'];
+    }
+
+    // everything else is closed
+  }
+}
