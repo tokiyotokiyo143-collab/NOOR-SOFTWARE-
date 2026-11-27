@@ -48,3 +48,23 @@ jobs:
         with:
           name: NoorSoftware-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Make v10 page from the verified original
+        run: |
+          node tools/patch-v10.js app/src/main/assets/index.html /tmp/v10.html
+          ls -l /tmp/v10.html
+          test $(stat -c %s /tmp/v10.html) -gt 2400000
+          cp /tmp/v10.html app/src/main/assets/index.html
+          cp app/build/outputs/apk/debug/app-debug.apk /tmp/safe.apk
+
+      - name: Build v10 APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Verify v10 APK contains v10 page
+        run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep index.html
+
+      - name: Upload v10 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoorSoftware-v10-APK-test
+          path: app/build/outputs/apk/debug/app-debug.apk
